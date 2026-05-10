@@ -97,6 +97,14 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .diarizationEnabled.second.value
                         )
+                    ),
+                    noiseSuppressionEnabled = Pair(
+                        uiState.value.noiseSuppressionEnabled.first,
+                        mutableStateOf(
+                            preferences[uiState.value.noiseSuppressionEnabled
+                                .first] ?: uiState.value
+                                .noiseSuppressionEnabled.second.value
+                        )
                     )
                 )
             }

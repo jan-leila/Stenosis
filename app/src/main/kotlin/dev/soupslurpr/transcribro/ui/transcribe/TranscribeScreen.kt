@@ -77,6 +77,7 @@ fun TranscribeScreen() {
     )
     val preferencesUiState by preferencesViewModel.uiState.collectAsState()
     val diarizationEnabled = preferencesUiState.diarizationEnabled.second.value
+    val noiseSuppressionEnabled = preferencesUiState.noiseSuppressionEnabled.second.value
 
     // Per-screen label store. When we wire renaming later (e.g. LLM-driven speaker
     // naming after a session), this is the surface that pulls names from. For now it
@@ -202,6 +203,10 @@ fun TranscribeScreen() {
                                 putExtra(MainRecognitionService.EXTRA_AUTO_STOP, false)
                                 putExtra(MainRecognitionService.EXTRA_STREAMING, true)
                                 putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarizationEnabled)
+                                putExtra(
+                                    MainRecognitionService.EXTRA_NOISE_SUPPRESSION,
+                                    noiseSuppressionEnabled,
+                                )
                             }
                         )
                     }

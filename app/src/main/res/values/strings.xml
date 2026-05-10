@@ -40,5 +40,7 @@
     <string name="streaming_transcription_setting_description">Show a live-updating preview of speech as it is being recognized. The preview is replaced with the final transcription once a pause is detected.</string>
     <string name="diarization_setting_name">Speaker Diarization</string>
     <string name="diarization_setting_description">Identify and label different speakers in the conversation. Adds about 30 MB of memory; transcribed text appears once each speaker has paused for a few seconds rather than continuously.</string>
+    <string name="noise_suppression_setting_name">Noise Suppression</string>
+    <string name="noise_suppression_setting_description">Filter background noise out of microphone audio before transcribing. Improves accuracy in noisy environments and helps speaker diarization stay stable. Adds about 10 ms of input latency.</string>
     <string name="transcribe">Transcribe</string>
 </resources>

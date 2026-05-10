@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.whispercpp.rnnoise.Denoiser
 import com.whispercpp.whisper.WhisperContext
 import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationManager
 import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationRepository
@@ -56,6 +57,9 @@ class MainRecognitionService : RecognitionService() {
         const val EXTRA_AUTO_STOP = "dev.soupslurpr.transcribro.EXTRA_AUTO_STOP"
         const val EXTRA_STREAMING = "dev.soupslurpr.transcribro.EXTRA_STREAMING"
         const val EXTRA_DIARIZATION = "dev.soupslurpr.transcribro.EXTRA_DIARIZATION"
+        // Apply RNNoise denoising to the mic input before it reaches whisper, silero,
+        // and the diarization pipeline. Defaults to true if the caller doesn't set it.
+        const val EXTRA_NOISE_SUPPRESSION = "dev.soupslurpr.transcribro.EXTRA_NOISE_SUPPRESSION"
         // Speaker id (Int) attached to a partial bundle when diarization is on.
         // The display name lookup happens on the receiver via SpeakerLabelStore.
         const val RESULTS_SPEAKER_ID = "dev.soupslurpr.transcribro.RESULTS_SPEAKER_ID"
@@ -245,12 +249,15 @@ class MainRecognitionService : RecognitionService() {
         val isPartialResults = recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS)
         val streamingEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_STREAMING) ?: true
         val diarizationEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_DIARIZATION) ?: false
+        val noiseSuppressionEnabled =
+            recognizerIntent?.extras?.getBoolean(EXTRA_NOISE_SUPPRESSION) ?: true
         val speechStartPadMs = 24000
 
         Log.i(
             TAG,
             "onStartListening: streamingEnabled=$streamingEnabled " +
-                "isPartialResults=$isPartialResults diarizationEnabled=$diarizationEnabled"
+                "isPartialResults=$isPartialResults diarizationEnabled=$diarizationEnabled " +
+                "noiseSuppressionEnabled=$noiseSuppressionEnabled"
         )
 
         val streamingInFlight = AtomicBoolean(false)
@@ -307,6 +314,19 @@ class MainRecognitionService : RecognitionService() {
                 throw SecurityException(e)
             }
         }
+
+        // Per-session denoiser. RNNoise maintains internal noise-adaptation state, so a
+        // fresh instance per recording is correct. If construction fails we fall back to
+        // raw audio rather than failing the whole session — the user's transcription is
+        // more important than a denoising pass.
+        val denoiser: Denoiser? = if (noiseSuppressionEnabled) {
+            try {
+                Denoiser.create()
+            } catch (e: Throwable) {
+                Log.w(TAG, "failed to create RNNoise denoiser; falling back to raw audio", e)
+                null
+            }
+        } else null
 
 
 //        val model = when (recognizerIntent?.extras?.getString(RecognizerIntent.EXTRA_LANGUAGE_MODEL)) {
@@ -396,6 +416,7 @@ class MainRecognitionService : RecognitionService() {
                 bufferSize = bufferSize,
                 isPartialResults = isPartialResults == true,
                 listener = listener,
+                denoiser = denoiser,
             )
             return
         }
@@ -415,9 +436,21 @@ class MainRecognitionService : RecognitionService() {
             listener?.readyForSpeech(Bundle())
 
             while (isRecording.get() && isActive) {
-                val buffer = ShortArray(bufferSize)
-
-                val numberOfShorts = audioRecord.read(buffer, 0, bufferSize)
+                val rawBuffer = ShortArray(bufferSize)
+                val numberOfShorts = audioRecord.read(rawBuffer, 0, bufferSize)
+                // Apply RNNoise if enabled; otherwise pass the raw samples straight through.
+                // The denoised chunk size may differ from numberOfShorts because RNNoise
+                // operates on 480-sample 48 kHz frames and buffers partials; output lags
+                // input by ~10 ms.
+                val buffer: ShortArray = when {
+                    numberOfShorts <= 0 -> ShortArray(0)
+                    denoiser != null -> {
+                        val raw = if (numberOfShorts == bufferSize) rawBuffer else rawBuffer.copyOf(numberOfShorts)
+                        denoiser.process(raw)
+                    }
+                    numberOfShorts == bufferSize -> rawBuffer
+                    else -> rawBuffer.copyOf(numberOfShorts)
+                }
 
                 // Snapshot transcriptionIndex once per loop iteration. The VAD coroutine
                 // (audioRmsScope, on Dispatchers.IO) increments transcriptionIndex on its
@@ -425,7 +458,7 @@ class MainRecognitionService : RecognitionService() {
                 // when the index advances between the null-check and the !! access below.
                 val currentTranscriptionIndex = transcriptionIndex
 
-                for (i in 0 until numberOfShorts) {
+                for (i in buffer.indices) {
                     if (transcriptions[currentTranscriptionIndex] == null) {
                         transcriptions[currentTranscriptionIndex] = Transcription(start = null, end = null, text = null)
                     }
@@ -435,6 +468,7 @@ class MainRecognitionService : RecognitionService() {
                 if (!isActive) {
                     audioRecord.stop()
                     audioRecord.release()
+                    denoiser?.close()
                     return@recordAndTranscribe
                 }
 
@@ -735,6 +769,7 @@ class MainRecognitionService : RecognitionService() {
 
             audioRecord.stop()
             audioRecord.release()
+            denoiser?.close()
 
             sileroVadRepository.reset()
 
@@ -828,6 +863,7 @@ class MainRecognitionService : RecognitionService() {
         bufferSize: Int,
         isPartialResults: Boolean,
         listener: Callback?,
+        denoiser: Denoiser?,
     ): Job = recordAndTranscribeScope.launch diarize@{
         isRecording.set(true)
         stopListening = false
@@ -920,10 +956,21 @@ class MainRecognitionService : RecognitionService() {
         try {
             audioRecord.startRecording()
             while (isRecording.get() && isActive) {
-                val buffer = ShortArray(bufferSize)
-                val n = audioRecord.read(buffer, 0, bufferSize)
+                val rawBuffer = ShortArray(bufferSize)
+                val n = audioRecord.read(rawBuffer, 0, bufferSize)
                 if (n > 0) {
-                    val chunk = if (n == bufferSize) buffer else buffer.copyOf(n)
+                    val rawChunk = if (n == bufferSize) rawBuffer else rawBuffer.copyOf(n)
+                    val chunk = denoiser?.process(rawChunk) ?: rawChunk
+                    if (chunk.isEmpty()) {
+                        // Denoiser still buffering the first 10 ms of input — nothing to
+                        // hand off this tick.
+                        if (stopListening) {
+                            isRecording.set(false)
+                            listener?.endOfSpeech()
+                            break
+                        }
+                        continue
+                    }
                     manager.process(chunk)
                     samplesSinceLastStreaming += chunk.size
 
@@ -1037,6 +1084,7 @@ class MainRecognitionService : RecognitionService() {
         } finally {
             try { audioRecord.stop() } catch (_: Throwable) {}
             audioRecord.release()
+            denoiser?.close()
 
             // Close any open per-speaker segments — emits one last transcribe job per.
             manager.flush()

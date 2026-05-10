@@ -155,6 +155,8 @@ class VoiceInput : InputMethodService() {
 
             val streamingTranscription by preferencesUiState.streamingTranscription.second
 
+            val noiseSuppression by preferencesUiState.noiseSuppressionEnabled.second
+
             val diarizationEnabled by preferencesUiState.diarizationEnabled.second
 
             val snackbarHostState = remember { SnackbarHostState() }
@@ -482,6 +484,7 @@ class VoiceInput : InputMethodService() {
                                                         autoStopRecognition,
                                                         streamingTranscription,
                                                         diarizationEnabled,
+                                                        noiseSuppression,
                                                     )
                                                 )
                                             }
@@ -589,6 +592,7 @@ class VoiceInput : InputMethodService() {
                                                                 autoStopRecognition,
                                                                 streamingTranscription,
                                                                 diarizationEnabled,
+                                                                noiseSuppression,
                                                             )
                                                         )
                                                     }
@@ -994,12 +998,14 @@ class VoiceInput : InputMethodService() {
         longForm: Boolean,
         streaming: Boolean,
         diarization: Boolean,
+        noiseSuppression: Boolean,
     ): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(MainRecognitionService.EXTRA_AUTO_STOP, longForm)
             putExtra(MainRecognitionService.EXTRA_STREAMING, streaming)
             putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarization)
+            putExtra(MainRecognitionService.EXTRA_NOISE_SUPPRESSION, noiseSuppression)
         }
     }
 }

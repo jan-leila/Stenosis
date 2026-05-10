@@ -58,5 +58,17 @@ data class PreferencesUiState(
     val diarizationEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("DIARIZATION_ENABLED")),
         mutableStateOf(false)
+    ),
+
+    /**
+     * Whether to apply RNNoise denoising to the mic input before transcription. On
+     * by default — it noticeably improves whisper accuracy on noisy recordings and
+     * helps the speaker-embedding model produce cleaner clusters. Adds ~10ms of
+     * input latency and a small CPU cost (one 33-tap FIR resample plus the RNN per
+     * 10ms frame).
+     */
+    val noiseSuppressionEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        (booleanPreferencesKey("NOISE_SUPPRESSION_ENABLED")),
+        mutableStateOf(true)
     )
 )

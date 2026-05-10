@@ -1,6 +1,112 @@
+import java.security.MessageDigest
+
 plugins {
     id 'com.android.library'
     id 'org.jetbrains.kotlin.android'
+}
+
+/**
+ * Downloads + sha-verifies + extracts the xiph/rnnoise model tarball whose hash is
+ * pinned in `rnnoise/model_version`. The tarball ships `src/rnnoise_data.c` and
+ * `src/rnnoise_data.h` (the network weights as C tables) — without them, librnnoise
+ * has no model to load. We extract to a cache outside the project tree so a
+ * `gradlew clean` doesn't re-download every time, and so multiple worktrees on the
+ * same machine share the cache.
+ *
+ * The version hash file IS the SHA-256 of the tarball (per xiph's convention in
+ * `rnnoise/download_model.sh`), so we don't need a separate checksum input.
+ */
+def rnnoiseSubmodule = file("${rootDir}/rnnoise")
+def rnnoiseVersionFile = file("${rnnoiseSubmodule}/model_version")
+def rnnoiseModelCacheDir = new File(gradle.gradleUserHomeDir, "transcribro-model-cache/rnnoise")
+
+tasks.register('downloadRnnoiseModel') {
+    description = "Downloads + extracts the rnnoise default-model tarball."
+    group = "build"
+
+    inputs.file(rnnoiseVersionFile)
+    outputs.dir(rnnoiseModelCacheDir)
+
+    doLast {
+        if (!rnnoiseVersionFile.exists()) {
+            throw new GradleException(
+                "Missing ${rnnoiseVersionFile}. Initialize the rnnoise submodule:\n" +
+                "  git submodule update --init rnnoise")
+        }
+        def hash = rnnoiseVersionFile.text.trim()
+        def tarballName = "rnnoise_data-${hash}.tar.gz"
+        def url = "https://media.xiph.org/rnnoise/models/${tarballName}"
+
+        rnnoiseModelCacheDir.mkdirs()
+        def tarball = new File(rnnoiseModelCacheDir, tarballName)
+        def extractedMarker = new File(rnnoiseModelCacheDir, ".extracted-${hash}")
+
+        if (extractedMarker.exists()) {
+            logger.lifecycle "[downloadRnnoiseModel] ${hash} already extracted"
+            return
+        }
+
+        if (!tarball.exists() || sha256(tarball) != hash) {
+            logger.lifecycle "[downloadRnnoiseModel] downloading ${url}"
+            def tmp = new File(rnnoiseModelCacheDir, "${tarballName}.part")
+            try {
+                new URL(url).withInputStream { input ->
+                    tmp.withOutputStream { output -> output << input }
+                }
+                def got = sha256(tmp)
+                if (got != hash) {
+                    tmp.delete()
+                    throw new GradleException(
+                        "Checksum mismatch for ${tarballName}\n" +
+                        "  expected: ${hash}\n" +
+                        "  actual:   ${got}")
+                }
+                if (!tmp.renameTo(tarball)) {
+                    throw new GradleException("Failed to move ${tmp} to ${tarball}")
+                }
+                logger.lifecycle "[downloadRnnoiseModel]   ok (${tarball.length()} bytes, sha verified)"
+            } catch (Exception e) {
+                tmp.delete()
+                if (e instanceof GradleException) throw e
+                throw new GradleException("Failed to download ${url}: ${e.message}", e)
+            }
+        } else {
+            logger.lifecycle "[downloadRnnoiseModel] cached ${tarballName} (sha verified)"
+        }
+
+        logger.lifecycle "[downloadRnnoiseModel] extracting"
+        // xiph ships the tarball with files rooted at `src/`; we want them under
+        // ${rnnoiseModelCacheDir}/src/. Use `tar` from the system since gradle's
+        // tarTree on .tar.gz needs a temp file and is fiddly.
+        def proc = ["tar", "xzf", tarball.absolutePath, "-C", rnnoiseModelCacheDir.absolutePath].execute()
+        proc.waitForProcessOutput(System.out, System.err)
+        if (proc.exitValue() != 0) {
+            throw new GradleException("tar extraction failed with exit code ${proc.exitValue()}")
+        }
+        extractedMarker.text = ""
+        logger.lifecycle "[downloadRnnoiseModel]   extracted to ${rnnoiseModelCacheDir}"
+    }
+}
+
+static String sha256(File file) {
+    def md = MessageDigest.getInstance("SHA-256")
+    file.withInputStream { input ->
+        def buf = new byte[8192]
+        int n
+        while ((n = input.read(buf)) > 0) md.update(buf, 0, n)
+    }
+    def sb = new StringBuilder()
+    for (byte b : md.digest()) sb.append(String.format("%02x", b & 0xff))
+    return sb.toString()
+}
+
+// Make CMake configure depend on the model being on disk. AGP runs CMake configure
+// per variant ("configureCMakeDebug[abi]", "configureCMakeRelWithDebInfo[abi]", …);
+// we wire the dependency dynamically so a new build type/ABI picks it up.
+project.afterEvaluate {
+    tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("buildCMake") }.all {
+        it.dependsOn("downloadRnnoiseModel")
+    }
 }
 
 android {
@@ -18,6 +124,10 @@ android {
         }
         externalNativeBuild {
             cmake {
+                // Always pass the rnnoise model directory; the rnnoise CMakeLists fails
+                // fast without it.
+                def cmakeArgs = ["-DRNNOISE_DATA_DIR=${rnnoiseModelCacheDir.absolutePath}".toString()]
+
                 // When set, builds whisper.android against the version located
                 // at GGML_HOME instead of the copy bundled with whisper.cpp.
                 if (
@@ -25,17 +135,19 @@ android {
                                 project.findProperty('GGML_CLBLAST') == 'ON'
                 ) {
                     // Turning on CLBlast requires GGML_HOME
-                    arguments "-DGGML_HOME=${project.property('GGML_HOME')}",
+                    cmakeArgs += [
+                            "-DGGML_HOME=${project.property('GGML_HOME')}".toString(),
                             "-DGGML_CLBLAST=ON",
-                            "-DOPENCL_LIB=${project.property('OPENCL_LIB')}",
-                            "-DCLBLAST_HOME=${project.property('CLBLAST_HOME')}",
-                            "-DOPENCL_ROOT=${project.property('OPENCL_ROOT')}",
+                            "-DOPENCL_LIB=${project.property('OPENCL_LIB')}".toString(),
+                            "-DCLBLAST_HOME=${project.property('CLBLAST_HOME')}".toString(),
+                            "-DOPENCL_ROOT=${project.property('OPENCL_ROOT')}".toString(),
                             "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH",
-                            "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH"
+                            "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH",
+                    ]
                 } else if (project.hasProperty('GGML_HOME')) {
-                    arguments "-DGGML_HOME=${project.property('GGML_HOME')}"
+                    cmakeArgs += ["-DGGML_HOME=${project.property('GGML_HOME')}".toString()]
                 }
-
+                arguments cmakeArgs as String[]
             }
         }
     }
@@ -58,7 +170,8 @@ android {
 
     externalNativeBuild {
         cmake {
-            path = file("src/main/jni/whisper/CMakeLists.txt")
+            // Top-level CMakeLists orchestrates both libwhisper_*.so and librnnoise.so.
+            path = file("src/main/jni/CMakeLists.txt")
         }
     }
     packagingOptions {

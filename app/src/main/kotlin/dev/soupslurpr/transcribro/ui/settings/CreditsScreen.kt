@@ -19,6 +19,42 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
 /**
+ * BSD 3-Clause license body keyed on the per-dependency copyright block. Like MIT, the
+ * copyright must be reproduced inline with the license text; some projects (like xiph's
+ * RNNoise) ship multiple copyright lines, so [copyrightBlock] is the full block to splice
+ * in.
+ */
+fun bsd3License(copyrightBlock: String): String =
+    "$copyrightBlock\n" +
+    "\n" +
+    "Redistribution and use in source and binary forms, with or without\n" +
+    "modification, are permitted provided that the following conditions\n" +
+    "are met:\n" +
+    "\n" +
+    "- Redistributions of source code must retain the above copyright\n" +
+    "  notice, this list of conditions and the following disclaimer.\n" +
+    "\n" +
+    "- Redistributions in binary form must reproduce the above copyright\n" +
+    "  notice, this list of conditions and the following disclaimer in the\n" +
+    "  documentation and/or other materials provided with the distribution.\n" +
+    "\n" +
+    "- Neither the name of the copyright holders nor the names of its\n" +
+    "  contributors may be used to endorse or promote products derived from\n" +
+    "  this software without specific prior written permission.\n" +
+    "\n" +
+    "THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n" +
+    "``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\n" +
+    "LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR\n" +
+    "A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT\n" +
+    "HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\n" +
+    "SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\n" +
+    "LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\n" +
+    "DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY\n" +
+    "THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n" +
+    "(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\n" +
+    "OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."
+
+/**
  * MIT license body keyed on a per-dependency copyright line (e.g. `"Copyright (c) 2020 Foo"`).
  * Apache 2.0 is a single fixed const because that license carries copyright in a separate
  * NOTICE file rather than inlining it; MIT instead requires the copyright be part of the
@@ -297,6 +333,19 @@ fun CreditsScreen(
                 dependencyName = "sherpa-onnx (model exports for pyannote and WeSpeaker)",
                 dependencyPackageName = "https://github.com/k2-fsa/sherpa-onnx",
                 dependencyLicense = APACHE2LICENSE,
+            )
+        }
+        item {
+            CreditsItem(
+                dependencyName = "RNNoise",
+                dependencyPackageName = "https://github.com/xiph/rnnoise",
+                dependencyLicense = bsd3License(
+                    "Copyright (c) 2007-2017, 2024 Jean-Marc Valin\n" +
+                    "Copyright (c) 2023 Amazon\n" +
+                    "Copyright (c) 2017, Mozilla\n" +
+                    "Copyright (c) 2005-2017, Xiph.Org Foundation\n" +
+                    "Copyright (c) 2003-2004, Mark Borgerding"
+                ),
             )
         }
         item {
