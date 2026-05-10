@@ -38,6 +38,31 @@ class WhisperContext private constructor(private var ptr: Long) {
         }
     }
 
+    /**
+     * @param audioCtxOverride if non-null, used directly as whisper's audio_ctx (smaller = faster,
+     * less accurate). If null, falls back to a duration-derived default.
+     */
+    suspend fun transcribeDataStreaming(
+        data: FloatArray,
+        dataTime: Long,
+        audioCtxOverride: Int? = null,
+    ): String =
+        withContext(scope.coroutineContext) {
+            require(ptr != 0L)
+            val numThreads = WhisperCpuConfig.preferredThreadCount
+
+            val audioCtx = audioCtxOverride
+                ?: min(((((dataTime.toFloat() / 1000f) / 30f) * 1500f) + 512f).toInt(), 1500)
+
+            WhisperLib.fullTranscribeStreaming(ptr, numThreads, data, audioCtx)
+            val textCount = WhisperLib.getTextSegmentCount(ptr)
+            return@withContext buildString {
+                for (i in 0 until textCount) {
+                    append(WhisperLib.getTextSegment(ptr, i))
+                }
+            }
+        }
+
     suspend fun benchMemory(nthreads: Int): String = withContext(scope.coroutineContext) {
         return@withContext WhisperLib.benchMemcpy(nthreads)
     }
@@ -132,6 +157,7 @@ private class WhisperLib {
         external fun initContext(modelPath: String): Long
         external fun freeContext(contextPtr: Long)
         external fun fullTranscribe(contextPtr: Long, numThreads: Int, audioData: FloatArray, audioCtx: Int)
+        external fun fullTranscribeStreaming(contextPtr: Long, numThreads: Int, audioData: FloatArray, audioCtx: Int)
         external fun getTextSegmentCount(contextPtr: Long): Int
         external fun getTextSegment(contextPtr: Long, index: Int): String
         external fun getSystemInfo(): String

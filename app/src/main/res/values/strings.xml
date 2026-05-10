@@ -36,4 +36,7 @@
     <string name="auto_start_recognition_setting_description">Automatically start recognition when switching from another input method</string>
     <string name="auto_send_transcription_setting_name">Auto-Send Transcription</string>
     <string name="auto_send_transcription_setting_description">Automatically send transcription when speech stops being detected</string>
+    <string name="streaming_transcription_setting_name">Streaming Transcription</string>
+    <string name="streaming_transcription_setting_description">Show a live-updating preview of speech as it is being recognized. The preview is replaced with the final transcription once a pause is detected.</string>
+    <string name="test_transcription">Test Transcription</string>
 </resources>

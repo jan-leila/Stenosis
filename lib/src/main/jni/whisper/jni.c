@@ -22,6 +22,64 @@ static inline int max(int a, int b) {
     return (a > b) ? a : b;
 }
 
+// whisper occasionally emits non-ASCII glyphs (e.g. musical notes ♪) and on rare
+// edge cases truncates the output mid-character. NewStringUTF aborts the VM under
+// CheckJNI when given invalid UTF-8, so before handing whisper's text to Java we
+// truncate to the last valid UTF-8 boundary. Modified-UTF-8 specifics (NUL escaping,
+// supplementary-pair encoding) don't apply here — whisper's English-only output
+// won't include either, so plain UTF-8 validation is sufficient.
+static jstring safe_new_string_utf(JNIEnv *env, const char *src) {
+    if (src == NULL) {
+        return (*env)->NewStringUTF(env, "");
+    }
+    size_t n = strlen(src);
+    size_t valid_end = 0;
+    size_t i = 0;
+    while (i < n) {
+        unsigned char b = (unsigned char) src[i];
+        size_t needed;
+        if ((b & 0x80) == 0) {
+            needed = 1;
+        } else if ((b & 0xE0) == 0xC0) {
+            needed = 2;
+        } else if ((b & 0xF0) == 0xE0) {
+            needed = 3;
+        } else if ((b & 0xF8) == 0xF0) {
+            needed = 4;
+        } else {
+            break;
+        }
+        if (i + needed > n) {
+            break;
+        }
+        int ok = 1;
+        for (size_t j = 1; j < needed; j++) {
+            unsigned char cb = (unsigned char) src[i + j];
+            if ((cb & 0xC0) != 0x80) {
+                ok = 0;
+                break;
+            }
+        }
+        if (!ok) {
+            break;
+        }
+        i += needed;
+        valid_end = i;
+    }
+    if (valid_end == n) {
+        return (*env)->NewStringUTF(env, src);
+    }
+    char *buf = (char *) malloc(valid_end + 1);
+    if (buf == NULL) {
+        return (*env)->NewStringUTF(env, "");
+    }
+    memcpy(buf, src, valid_end);
+    buf[valid_end] = '\0';
+    jstring result = (*env)->NewStringUTF(env, buf);
+    free(buf);
+    return result;
+}
+
 struct input_stream_context {
     size_t offset;
     JNIEnv * env;
@@ -194,6 +252,35 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
 }
 
+JNIEXPORT void JNICALL
+Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribeStreaming(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data, jint audio_ctx) {
+    UNUSED(thiz);
+    struct whisper_context *context = (struct whisper_context *) context_ptr;
+    jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
+    const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
+
+    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.print_realtime = false;
+    params.print_progress = false;
+    params.print_timestamps = false;
+    params.print_special = false;
+    params.translate = false;
+    params.language = "en";
+    params.n_threads = num_threads;
+    params.offset_ms = 0;
+    params.no_context = true;
+    params.single_segment = true;
+    params.audio_ctx = audio_ctx;
+    params.suppress_nst = true;
+    params.temperature_inc = 0.0f;
+
+    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
+        LOGI("Failed to run streaming inference");
+    }
+    (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_whispercpp_whisper_WhisperLib_00024Companion_getTextSegmentCount(
         JNIEnv *env, jobject thiz, jlong context_ptr) {
@@ -209,8 +296,7 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_getTextSegment(
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
     const char *text = whisper_full_get_segment_text(context, index);
-    jstring string = (*env)->NewStringUTF(env, text);
-    return string;
+    return safe_new_string_utf(env, text);
 }
 
 JNIEXPORT jstring JNICALL

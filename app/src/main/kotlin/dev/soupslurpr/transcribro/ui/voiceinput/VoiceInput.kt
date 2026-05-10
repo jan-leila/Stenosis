@@ -108,6 +108,16 @@ private var showInsufficientPermissionsError by mutableStateOf(false)
 
 private var isSpeaking by mutableStateOf(false)
 
+private var isShowingStreamingPreview = false
+
+private fun dropStreamingPreview(ic: InputConnection?) {
+    if (isShowingStreamingPreview) {
+        ic?.setComposingText("", 1)
+        ic?.finishComposingText()
+        isShowingStreamingPreview = false
+    }
+}
+
 class VoiceInput : InputMethodService() {
     private val voiceInputLifecycleOwner = VoiceInputLifecycleOwner()
 
@@ -142,6 +152,8 @@ class VoiceInput : InputMethodService() {
             val autoStopRecognition by preferencesUiState.autoStopRecognition.second
 
             val autoStartRecognition by preferencesUiState.autoStartRecognition.second
+
+            val streamingTranscription by preferencesUiState.streamingTranscription.second
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -271,6 +283,7 @@ class VoiceInput : InputMethodService() {
                                                 }
 
                                                 override fun onError(error: Int) {
+                                                    dropStreamingPreview(currentInputConnection)
                                                     when (error) {
                                                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                                                             showInsufficientPermissionsError = true
@@ -292,6 +305,7 @@ class VoiceInput : InputMethodService() {
 
                                                 override fun onResults(results: Bundle?) {
                                                     isRecognizing = false
+                                                    dropStreamingPreview(currentInputConnection)
 
                                                     if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
                                                         stoppedRecognitionMediaPlayer.start()
@@ -303,8 +317,33 @@ class VoiceInput : InputMethodService() {
                                                 }
 
                                                 override fun onPartialResults(partialResults: Bundle?) {
+                                                    if (partialResults == null) return
+
+                                                    val isStreamingPreview = partialResults.getBoolean(
+                                                        MainRecognitionService.RESULTS_STREAMING_PARTIAL,
+                                                        false
+                                                    )
+
+                                                    if (isStreamingPreview) {
+                                                        val previewText = partialResults.getStringArrayList(
+                                                            SpeechRecognizer.RESULTS_RECOGNITION
+                                                        )?.firstOrNull().orEmpty()
+                                                        if (previewText.isNotBlank()) {
+                                                            currentInputConnection?.setComposingText(
+                                                                previewText.trimStart(),
+                                                                1
+                                                            )
+                                                            isShowingStreamingPreview = true
+                                                        }
+                                                        return
+                                                    }
+
+                                                    // Segment-final partial: drop the preview so the smart-commit
+                                                    // logic below operates on the editor's actual content.
+                                                    dropStreamingPreview(currentInputConnection)
+
                                                     currentInputConnection.also { ic: InputConnection ->
-                                                        if (partialResults != null) {
+                                                        run {
                                                             val transcription = partialResults.getStringArrayList(
                                                                 SpeechRecognizer.RESULTS_RECOGNITION
                                                             )?.get(0) ?: ""
@@ -438,7 +477,8 @@ class VoiceInput : InputMethodService() {
                                             if (autoStartRecognition) {
                                                 speechRecognizer.value!!.startListening(
                                                     getStartListeningIntent(
-                                                        autoStopRecognition
+                                                        autoStopRecognition,
+                                                        streamingTranscription
                                                     )
                                                 )
                                             }
@@ -543,7 +583,8 @@ class VoiceInput : InputMethodService() {
                                                     } else {
                                                         speechRecognizer.value?.startListening(
                                                             getStartListeningIntent(
-                                                                autoStopRecognition
+                                                                autoStopRecognition,
+                                                                streamingTranscription
                                                             )
                                                         )
                                                     }
@@ -945,10 +986,11 @@ class VoiceInput : InputMethodService() {
         speechRecognizer.value = null
     }
 
-    private fun getStartListeningIntent(longForm: Boolean): Intent {
+    private fun getStartListeningIntent(longForm: Boolean, streaming: Boolean): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(MainRecognitionService.EXTRA_AUTO_STOP, longForm)
+            putExtra(MainRecognitionService.EXTRA_STREAMING, streaming)
         }
     }
 }

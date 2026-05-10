@@ -17,9 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.VolunteerActivism
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,6 +58,7 @@ import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import dev.soupslurpr.transcribro.ui.action_recognize_speech.ActionRecognizeSpeechScreen
 import dev.soupslurpr.transcribro.ui.donate.DonateStartScreen
+import dev.soupslurpr.transcribro.ui.test_transcription.TestTranscriptionScreen
 import dev.soupslurpr.transcribro.ui.settings.CreditsScreen
 import dev.soupslurpr.transcribro.ui.settings.LicenseScreen
 import dev.soupslurpr.transcribro.ui.settings.PrivacyPolicyScreen
@@ -75,11 +78,14 @@ enum class TranscribroAppScreens(@StringRes val title: Int) {
     SettingsCredits(title = R.string.credits),
     Donate(title = R.string.donate),
     DonateStart(title = R.string.donate),
+    TestTranscription(title = R.string.test_transcription),
+    TestTranscriptionStart(title = R.string.test_transcription),
 }
 
 val navBarScreens = listOf(
     TranscribroAppScreens.Start,
     TranscribroAppScreens.Settings,
+    TranscribroAppScreens.TestTranscription,
     TranscribroAppScreens.Donate,
 )
 
@@ -185,6 +191,15 @@ fun TranscribroApp(
                                             Icons.Filled.VolunteerActivism
                                         } else {
                                             Icons.Outlined.VolunteerActivism
+                                        },
+                                        contentDescription = null
+                                    )
+
+                                    TranscribroAppScreens.TestTranscription -> Icon(
+                                        imageVector = if (navBarSelected == navBarScreen) {
+                                            Icons.Filled.Mic
+                                        } else {
+                                            Icons.Outlined.Mic
                                         },
                                         contentDescription = null
                                     )
@@ -302,6 +317,16 @@ fun TranscribroApp(
                             }
                         }
                     )
+                }
+            }
+            navigationWithDefaultSlideTransitions(
+                route = TranscribroAppScreens.TestTranscription,
+                startDestination = TranscribroAppScreens.TestTranscriptionStart.name,
+            ) {
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.TestTranscriptionStart
+                ) {
+                    TestTranscriptionScreen()
                 }
             }
         }

@@ -81,6 +81,14 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .autoSendTranscription.second.value
                         )
+                    ),
+                    streamingTranscription = Pair(
+                        uiState.value.streamingTranscription.first,
+                        mutableStateOf(
+                            preferences[uiState.value.streamingTranscription
+                                .first] ?: uiState.value
+                                .streamingTranscription.second.value
+                        )
                     )
                 )
             }

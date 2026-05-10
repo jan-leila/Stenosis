@@ -41,5 +41,11 @@ data class PreferencesUiState(
     val autoSendTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("AUTO_SEND_TRANSCRIPTION")),
         mutableStateOf(false)
+    ),
+
+    /** Whether to show a live-updating preview of the current speech segment as it is being spoken. */
+    val streamingTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        (booleanPreferencesKey("STREAMING_TRANSCRIPTION")),
+        mutableStateOf(true)
     )
 )

@@ -17,6 +17,11 @@ class WhisperRepository(
         }
     }
 
+    /** Eagerly load the model so the first transcription doesn't pay model-load latency. */
+    suspend fun preload() {
+        loadWhisperContextIfNull()
+    }
+
     suspend fun transcribeAudio(data: ShortArray): String {
         loadWhisperContextIfNull()
         // assume we only have one channel
@@ -38,6 +43,29 @@ class WhisperRepository(
 
         val transcript = whisperContext.value?.transcribeData(buffer, ((data.size / 16000f) * 1000f).toLong()) ?: ""
         return transcript.removeSuffix(" .") // remove hallucination
+    }
+
+    suspend fun transcribePartialAudio(data: ShortArray, audioCtx: Int? = null): String {
+        loadWhisperContextIfNull()
+        var buffer = FloatArray(data.size) { index ->
+            (data[index] / 32767.0f).coerceIn(-1f..1f)
+        }
+
+        if (data.size < 32000) {
+            val newBuffer = FloatArray(32000)
+            for ((i, value) in buffer.withIndex()) {
+                newBuffer[i] = value
+            }
+            newBuffer.fill(0f, data.size, newBuffer.size)
+            buffer = newBuffer
+        }
+
+        val transcript = whisperContext.value?.transcribeDataStreaming(
+            buffer,
+            ((data.size / 16000f) * 1000f).toLong(),
+            audioCtx,
+        ) ?: ""
+        return transcript.removeSuffix(" .")
     }
 
     suspend fun release() {

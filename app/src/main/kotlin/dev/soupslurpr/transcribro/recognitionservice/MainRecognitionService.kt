@@ -10,6 +10,7 @@ import android.os.RemoteException
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +42,35 @@ private data class Transcription(
 class MainRecognitionService : RecognitionService() {
     companion object {
         const val EXTRA_AUTO_STOP = "dev.soupslurpr.transcribro.EXTRA_AUTO_STOP"
+        const val EXTRA_STREAMING = "dev.soupslurpr.transcribro.EXTRA_STREAMING"
+        // Marks a partialResults bundle as a live streaming preview that the IME
+        // should render with setComposingText (and finalize when the segment-final partial arrives).
+        const val RESULTS_STREAMING_PARTIAL = "dev.soupslurpr.transcribro.RESULTS_STREAMING_PARTIAL"
+        // Re-run streaming inference once we've accumulated this many new samples (1s @ 16kHz).
+        private const val STREAMING_TRIGGER_SAMPLES = 16000
+        // The streaming pass only ever sees the most-recent N samples of the segment.
+        // Whisper's encoder maxes out at 30s of context, and we use single_segment=true,
+        // so anything older than this window would either be dropped silently or cause
+        // the preview to keep echoing the start of the segment. The segment-final pass
+        // (run when VAD detects end-of-speech) still sees the entire segment.
+        private const val STREAMING_WINDOW_SAMPLES = 10 * 16000
+        private const val TAG = "MainRecognitionService"
+
+        // Adaptive audio_ctx (whisper encoder context length) — smaller is faster, less accurate.
+        // We tune it so the streaming partial lands roughly STREAMING_TARGET_STALENESS_MS after
+        // the last sample in its snapshot was captured.
+        private const val STREAMING_TARGET_STALENESS_MS = 1000L
+        private const val STREAMING_AUDIO_CTX_INITIAL = 768
+        private const val STREAMING_AUDIO_CTX_MIN = 256
+        private const val STREAMING_AUDIO_CTX_MAX = 1500
+        private const val STREAMING_AUDIO_CTX_STEP = 128
+
+        // When the sliding window has left at least this much audio behind un-transcribed,
+        // run a one-off "lock-in" whisper pass on the orphaned chunk and append its text
+        // to the confirmed prefix. Larger = fewer locks but bigger preview-jumps; smaller =
+        // more frequent locks (more total whisper work) but smoother prefix growth. 2s is
+        // also large enough that we rarely cut a chunk in the middle of a word.
+        private const val STREAMING_LOCKIN_GAP_SAMPLES = 2 * 16000
     }
 
     private val recordAndTranscribeScope = CoroutineScope(Dispatchers.IO)
@@ -58,6 +88,8 @@ class MainRecognitionService : RecognitionService() {
     private var stopListening by mutableStateOf(false)
 
     private val transcribeJobs = mutableListOf<Job>()
+
+    private val streamingJobs = mutableListOf<Job>()
 
     private val whisperRepository: WhisperRepository =
         WhisperRepository(
@@ -106,10 +138,36 @@ class MainRecognitionService : RecognitionService() {
         )
     )
 
+    override fun onCreate() {
+        super.onCreate()
+        // Pre-load the whisper context so the first streaming pass doesn't pay
+        // model-load latency (which is large enough that VAD typically closes the
+        // segment before the first preview can emit).
+        recordAndTranscribeScope.launch {
+            whisperRepository.preload()
+            Log.i(TAG, "whisper context preloaded")
+        }
+    }
+
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
         val autoStopRecognition = recognizerIntent?.extras?.getBoolean(EXTRA_AUTO_STOP) ?: true
         val isPartialResults = recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS)
+        val streamingEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_STREAMING) ?: true
         val speechStartPadMs = 24000
+
+        Log.i(TAG, "onStartListening: streamingEnabled=$streamingEnabled isPartialResults=$isPartialResults")
+
+        val streamingInFlight = AtomicBoolean(false)
+        var lastStreamedSize = 0
+        var lastStreamedTranscriptionIndex = -1
+        var streamingAudioCtx = STREAMING_AUDIO_CTX_INITIAL
+
+        // Stitching state: as the sliding window advances past audio that is no longer
+        // visible to the streaming pass, we run a "lock-in" pass to transcribe that
+        // orphaned chunk and append its text to confirmedPrefixText. The streaming
+        // partial we emit is `confirmedPrefixText + " " + streamingTailText`.
+        var confirmedPrefixText = ""
+        var confirmedAudioEndSample = 0
 
         if (recordAndTranscribeJob?.isActive == true) {
             listener?.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY)
@@ -244,6 +302,7 @@ class MainRecognitionService : RecognitionService() {
 
             val audioRmsScope = CoroutineScope(Dispatchers.IO)
             transcribeJobs.clear()
+            streamingJobs.clear()
             val transcriptions = mutableMapOf<Int, Transcription>()
             var transcriptionIndex by mutableIntStateOf(0)
 
@@ -254,17 +313,158 @@ class MainRecognitionService : RecognitionService() {
 
                 val numberOfShorts = audioRecord.read(buffer, 0, bufferSize)
 
+                // Snapshot transcriptionIndex once per loop iteration. The VAD coroutine
+                // (audioRmsScope, on Dispatchers.IO) increments transcriptionIndex on its
+                // "end" event, racing with this thread; without snapshotting we'd hit NPE
+                // when the index advances between the null-check and the !! access below.
+                val currentTranscriptionIndex = transcriptionIndex
+
                 for (i in 0 until numberOfShorts) {
-                    if (transcriptions[transcriptionIndex] == null) {
-                        transcriptions[transcriptionIndex] = Transcription(start = null, end = null, text = null)
+                    if (transcriptions[currentTranscriptionIndex] == null) {
+                        transcriptions[currentTranscriptionIndex] = Transcription(start = null, end = null, text = null)
                     }
-                    transcriptions[transcriptionIndex]!!.audioData.add(buffer[i])
+                    transcriptions[currentTranscriptionIndex]!!.audioData.add(buffer[i])
                 }
 
                 if (!isActive) {
                     audioRecord.stop()
                     audioRecord.release()
                     return@recordAndTranscribe
+                }
+
+                // Sliding-window streaming preview: while the current segment is still open
+                // (VAD start fired, end has not), every ~1s of new audio we kick off a fast
+                // greedy whisper pass on the segment-so-far and emit it as a streaming partial.
+                if (streamingEnabled && isPartialResults == true) {
+                    if (lastStreamedTranscriptionIndex != currentTranscriptionIndex) {
+                        lastStreamedSize = 0
+                        lastStreamedTranscriptionIndex = currentTranscriptionIndex
+                        confirmedPrefixText = ""
+                        confirmedAudioEndSample = 0
+                    }
+                    val streamingTranscription = transcriptions[currentTranscriptionIndex]
+                    val streamingStart = streamingTranscription?.start
+                    if (streamingTranscription != null
+                        && streamingStart != null
+                        && streamingTranscription.end == null
+                        && !streamingInFlight.get()
+                    ) {
+                        val currentSize = streamingTranscription.audioData.size
+                        if (currentSize - lastStreamedSize >= STREAMING_TRIGGER_SAMPLES) {
+                            lastStreamedSize = currentSize
+                            // Sliding window: at most STREAMING_WINDOW_SAMPLES of trailing audio.
+                            val segmentSliceStart = (streamingStart.toInt() - speechStartPadMs).coerceAtLeast(0)
+                            val windowSliceStart = (currentSize - STREAMING_WINDOW_SAMPLES).coerceAtLeast(0)
+                            val sliceStart = maxOf(segmentSliceStart, windowSliceStart)
+                            val sliceEnd = (currentSize - 1).coerceAtLeast(sliceStart)
+
+                            // If the window has slid far enough past the last-confirmed point,
+                            // grab the orphaned chunk so a lock-in pass can transcribe it.
+                            val lockInStart = maxOf(segmentSliceStart, confirmedAudioEndSample)
+                            val lockInEnd = sliceStart - 1
+                            val lockInAudio = if (
+                                lockInEnd >= lockInStart &&
+                                (lockInEnd - lockInStart + 1) >= STREAMING_LOCKIN_GAP_SAMPLES
+                            ) {
+                                streamingTranscription.audioData
+                                    .subList(lockInStart, lockInEnd + 1)
+                                    .toShortArray()
+                            } else null
+                            val lockInUpToSample = if (lockInAudio != null) sliceStart else null
+
+                            val snapshot = streamingTranscription.audioData
+                                .subList(sliceStart, sliceEnd + 1)
+                                .toShortArray()
+                            val streamingForIndex = currentTranscriptionIndex
+                            streamingInFlight.set(true)
+                            val snapshotSize = snapshot.size
+                            val ctxForThisPass = streamingAudioCtx
+                            val launchedAtMs = currentTimeMillis()
+                            Log.i(
+                                TAG,
+                                "streaming launch: idx=$streamingForIndex samples=$snapshotSize ctx=$ctxForThisPass"
+                            )
+                            val streamingJob = transcribeScope.launch streaming@{
+                                try {
+                                    // Lock-in pass: still on the cheap streaming path (greedy,
+                                    // single-segment) so we never run the high-quality model
+                                    // mid-stream. The segment-final pass that fires when VAD
+                                    // detects end-of-speech is what re-transcribes the whole
+                                    // segment with beam search and replaces the preview.
+                                    if (lockInAudio != null && lockInUpToSample != null) {
+                                        val lockText = whisperRepository.transcribePartialAudio(
+                                            lockInAudio,
+                                            ctxForThisPass,
+                                        ).trim()
+                                        if (lockText.isNotEmpty()) {
+                                            confirmedPrefixText = if (confirmedPrefixText.isEmpty())
+                                                lockText
+                                            else
+                                                "$confirmedPrefixText $lockText"
+                                        }
+                                        confirmedAudioEndSample = lockInUpToSample
+                                        Log.i(
+                                            TAG,
+                                            "streaming lock-in: confirmedAudioEndSample=$confirmedAudioEndSample text=\"$lockText\""
+                                        )
+                                    }
+
+                                    val tailText = whisperRepository.transcribePartialAudio(
+                                        snapshot,
+                                        ctxForThisPass,
+                                    ).trim()
+                                    val staleness = currentTimeMillis() - launchedAtMs
+
+                                    // Adapt next pass's audio_ctx to keep staleness near the target.
+                                    val previous = streamingAudioCtx
+                                    streamingAudioCtx = when {
+                                        staleness > STREAMING_TARGET_STALENESS_MS * 3 / 2 ->
+                                            (streamingAudioCtx - STREAMING_AUDIO_CTX_STEP)
+                                                .coerceAtLeast(STREAMING_AUDIO_CTX_MIN)
+                                        staleness < STREAMING_TARGET_STALENESS_MS / 2 ->
+                                            (streamingAudioCtx + STREAMING_AUDIO_CTX_STEP)
+                                                .coerceAtMost(STREAMING_AUDIO_CTX_MAX)
+                                        else -> streamingAudioCtx
+                                    }
+                                    if (streamingAudioCtx != previous) {
+                                        Log.i(
+                                            TAG,
+                                            "streaming ctx adapt: $previous -> $streamingAudioCtx (staleness=${staleness}ms target=${STREAMING_TARGET_STALENESS_MS}ms)"
+                                        )
+                                    }
+
+                                    if (!isActive || !isRecording.get()) {
+                                        Log.i(TAG, "streaming dropped (cancelled) idx=$streamingForIndex staleness=${staleness}ms")
+                                        return@streaming
+                                    }
+                                    val current = transcriptions[streamingForIndex]
+                                    val ended = current?.end != null
+                                    val combined = listOf(confirmedPrefixText, tailText)
+                                        .filter { it.isNotEmpty() }
+                                        .joinToString(" ")
+                                    if (current != null && !ended && combined.isNotBlank()) {
+                                        Log.i(TAG, "streaming emit idx=$streamingForIndex staleness=${staleness}ms ctx=$ctxForThisPass tail=\"$tailText\" prefix=\"$confirmedPrefixText\"")
+                                        val bundle = Bundle().apply {
+                                            putStringArrayList(
+                                                SpeechRecognizer.RESULTS_RECOGNITION,
+                                                arrayListOf(combined)
+                                            )
+                                            putBoolean(RESULTS_STREAMING_PARTIAL, true)
+                                        }
+                                        listener?.partialResults(bundle)
+                                    } else {
+                                        Log.i(
+                                            TAG,
+                                            "streaming dropped idx=$streamingForIndex staleness=${staleness}ms ended=$ended blank=${combined.isBlank()}"
+                                        )
+                                    }
+                                } finally {
+                                    streamingInFlight.set(false)
+                                }
+                            }
+                            streamingJobs.add(streamingJob)
+                        }
+                    }
                 }
 
                 audioRmsScope.launch vadAndTranscribe@{
@@ -474,6 +674,9 @@ class MainRecognitionService : RecognitionService() {
         transcribeJobs.forEach {
             it.cancel()
         }
+        streamingJobs.forEach {
+            it.cancel()
+        }
         sileroVadRepository.reset()
     }
 
@@ -485,6 +688,9 @@ class MainRecognitionService : RecognitionService() {
         super.onDestroy()
         recordAndTranscribeJob?.cancel()
         transcribeJobs.forEach {
+            it.cancel()
+        }
+        streamingJobs.forEach {
             it.cancel()
         }
         runBlocking {
