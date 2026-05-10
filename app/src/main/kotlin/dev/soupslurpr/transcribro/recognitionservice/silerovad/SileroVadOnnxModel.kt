@@ -4,45 +4,47 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtException
 import ai.onnxruntime.OrtSession
+import dev.soupslurpr.transcribro.recognitionservice.OnnxSchemaValidator
 
 class SileroVadOnnxModel(modelBytes: ByteArray) {
-    // Define private variable OrtSession
     private val session: OrtSession
-    private lateinit var h: Array<Array<FloatArray>>
-    private lateinit var c: Array<Array<FloatArray>>
 
-    // Define the last sample rate
+    // Silero-VAD v5+ (the upstream `silero_vad.onnx` we now ship) packs the LSTM state
+    // into a single tensor `state[2, batch, 128]`. v3-era models used separate
+    // h[2,batch,64] / c[2,batch,64] tensors and a different input list — see git history
+    // if you ever need to bring an old export back.
+    private lateinit var state: Array<Array<FloatArray>>
+
+    // v5+ also requires every call to be a fixed-size frame (512 samples @ 16 kHz, 256
+    // samples @ 8 kHz) preceded by a CONTEXT_SIZE-sample carry-over from the previous
+    // frame. We maintain that rolling context here so [call] can pretend the API still
+    // takes raw samples. Reset along with [state].
+    private lateinit var context: Array<FloatArray>
+
     private var lastSr = 0
-
-    // Define the last batch size
     private var lastBatchSize = 0
 
-    // Constructor
     init {
-        // Get the ONNX runtime environment
         val env: OrtEnvironment = OrtEnvironment.getEnvironment()
-        // Create an ONNX session options object
-        val opts: OrtSession.SessionOptions = OrtSession.SessionOptions()
-        // Set the InterOp thread count to 1, InterOp threads are used for parallel processing of different computation graph operations
-        opts.setInterOpNumThreads(1)
-        // Set the IntraOp thread count to 1, IntraOp threads are used for parallel processing within a single operation
-        opts.setIntraOpNumThreads(1)
-        // Add a CPU device, setting to false disables CPU execution optimization
-        opts.addCPU(true)
-
-//        opts.addConfigEntry("session.load_model_format", "ORT")
-        // Create an ONNX session using the environment, model path, and options
+        val opts: OrtSession.SessionOptions = OrtSession.SessionOptions().apply {
+            setInterOpNumThreads(1)
+            setIntraOpNumThreads(1)
+            addCPU(true)
+        }
         session = env.createSession(modelBytes, opts)
-        // Reset states
+        OnnxSchemaValidator.verify(
+            modelName = "silero_vad",
+            session = session,
+            expectedInputs = setOf("input", "state", "sr"),
+            expectedOutputCount = 2,
+        )
         resetStates()
     }
 
-    /**
-     * Reset states
-     */
     fun resetStates() {
-        h = Array(2) { Array(1) { FloatArray(64) } }
-        c = Array(2) { Array(1) { FloatArray(64) } }
+        state = Array(2) { Array(1) { FloatArray(128) } }
+        // Initialised lazily once we know the sample rate (and therefore CONTEXT_SIZE).
+        context = arrayOf(FloatArray(0))
         lastSr = 0
         lastBatchSize = 0
     }
@@ -98,10 +100,14 @@ class SileroVadOnnxModel(modelBytes: ByteArray) {
         // If the sample rate is not in the list of supported sample rates, throw an exception
         require(SAMPLE_RATES.contains(sr)) { "Only supports sample rates $SAMPLE_RATES (or multiples of 16000)" }
 
-        // If the input audio block is too short, throw an exception
-        require(!((sr.toFloat()) / x[0]!!.size > 31.25)) { "Input audio is too short" }
+        // v5+ requires exactly FRAME_SIZE samples per call; reject anything else here so
+        // the failure mode is a clear `IllegalArgumentException` instead of a buried
+        // `OrtException` from the LSTM.
+        val expected = frameSize(sr)
+        require(x[0]!!.size == expected) {
+            "silero v5+ requires exactly $expected samples per call at $sr Hz; got ${x[0]!!.size}"
+        }
 
-        // Return the validated result
         return ValidationResult(x, sr)
     }
 
@@ -117,53 +123,74 @@ class SileroVadOnnxModel(modelBytes: ByteArray) {
         sr = result.sr
 
         val batchSize = x.size
+        val ctxSize = contextSize(sr)
+        val frameLen = frameSize(sr)
 
         if (lastBatchSize == 0 || lastSr != sr || lastBatchSize != batchSize) {
             resetStates()
         }
+        // First call after reset (or sample-rate change): start with zero context.
+        if (context[0].size != ctxSize) {
+            context = arrayOf(FloatArray(ctxSize))
+        }
+
+        // Build [batch, ctxSize + frameLen] = previous-context ++ this-frame
+        val frame = x[0]!!
+        val combined = Array(1) { FloatArray(ctxSize + frameLen) }
+        System.arraycopy(context[0], 0, combined[0], 0, ctxSize)
+        System.arraycopy(frame, 0, combined[0], ctxSize, frameLen)
 
         val env: OrtEnvironment = OrtEnvironment.getEnvironment()
 
         var inputTensor: OnnxTensor? = null
-        var hTensor: OnnxTensor? = null
-        var cTensor: OnnxTensor? = null
+        var stateTensor: OnnxTensor? = null
         var srTensor: OnnxTensor? = null
         var ortOutputs: OrtSession.Result? = null
 
         try {
-            // Create input tensors
-            inputTensor = OnnxTensor.createTensor(env, x)
-            hTensor = OnnxTensor.createTensor(env, h)
-            cTensor = OnnxTensor.createTensor(env, c)
-            srTensor = OnnxTensor.createTensor(env, longArrayOf(sr.toLong()))
+            inputTensor = OnnxTensor.createTensor(env, combined)
+            stateTensor = OnnxTensor.createTensor(env, state)
+            // v5+ silero expects `sr` as a 0-d (scalar) int64 tensor, not [1].
+            srTensor = OnnxTensor.createTensor(
+                env,
+                java.nio.LongBuffer.wrap(longArrayOf(sr.toLong())),
+                longArrayOf(),
+            )
 
             val inputs: MutableMap<String, OnnxTensor?> = HashMap()
             inputs["input"] = inputTensor
+            inputs["state"] = stateTensor
             inputs["sr"] = srTensor
-            inputs["h"] = hTensor
-            inputs["c"] = cTensor
 
-            // Call the ONNX model for calculation
             ortOutputs = session.run(inputs)
-            // Get the output results
+            @Suppress("UNCHECKED_CAST")
             val output = ortOutputs.get(0).value as Array<FloatArray>
-            h = ortOutputs.get(1).value as Array<Array<FloatArray>>
-            c = ortOutputs.get(2).value as Array<Array<FloatArray>>
+            @Suppress("UNCHECKED_CAST")
+            state = ortOutputs.get(1).value as Array<Array<FloatArray>>
+
+            // Save the trailing ctxSize samples of this frame for the next call.
+            val newContext = FloatArray(ctxSize)
+            System.arraycopy(frame, frameLen - ctxSize, newContext, 0, ctxSize)
+            context = arrayOf(newContext)
 
             lastSr = sr
             lastBatchSize = batchSize
             return output[0]
         } finally {
             inputTensor?.close()
-            hTensor?.close()
-            cTensor?.close()
+            stateTensor?.close()
             srTensor?.close()
             ortOutputs?.close()
         }
     }
 
     companion object {
-        // Define a list of supported sample rates
         private val SAMPLE_RATES: List<Int> = mutableListOf(8000, 16000)
+
+        /** Number of audio samples per inference call. v5+ silero is fixed at this size. */
+        fun frameSize(sr: Int): Int = if (sr == 16000) 512 else 256
+
+        /** Number of trailing samples of each frame that get prepended to the next call. */
+        fun contextSize(sr: Int): Int = if (sr == 16000) 64 else 32
     }
 }

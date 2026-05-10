@@ -16,6 +16,12 @@ class SileroVadRepository(
         }
     }
 
+    /** Eagerly load + schema-verify the model so first-use latency and failure modes
+     *  are exposed at service create time rather than mid-recognition. */
+    suspend fun preload() {
+        loadSileroVadDetectorIfNull()
+    }
+
     suspend fun detect(data: ShortArray): Map<String, Double>? {
         loadSileroVadDetectorIfNull()
 

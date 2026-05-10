@@ -37,10 +37,13 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.rememberCoroutineScope
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
+import dev.soupslurpr.transcribro.recognitionservice.diarization.verifyDiarizationModels
+import kotlinx.coroutines.launch
 
 /**
  * Test transcription view. Bypasses the IME entirely and drives MainRecognitionService
@@ -62,6 +65,10 @@ fun TestTranscriptionScreen() {
     var committedBuffer by remember { mutableStateOf("") }
     var livePreview by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("idle") }
+
+    val coroutineScope = rememberCoroutineScope()
+    var verifyReport by remember { mutableStateOf<String?>(null) }
+    var verifyRunning by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         val r = SpeechRecognizer.createSpeechRecognizer(
@@ -189,7 +196,14 @@ fun TestTranscriptionScreen() {
             style = MaterialTheme.typography.labelMedium,
         )
         Spacer(Modifier.size(12.dp))
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        ElevatedCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                // Take whatever vertical space is left after the buttons + verify panel,
+                // so the transcript scrolls inside the card instead of pushing siblings
+                // below the screen.
+                .weight(1f),
+        ) {
             val scrollState = rememberScrollState()
             Column(
                 modifier = Modifier
@@ -202,6 +216,47 @@ fun TestTranscriptionScreen() {
                     text = renderTranscript(committedBuffer, livePreview),
                     style = MaterialTheme.typography.bodyLarge,
                 )
+            }
+        }
+        Spacer(Modifier.size(12.dp))
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            OutlinedButton(
+                onClick = {
+                    if (verifyRunning) return@OutlinedButton
+                    verifyRunning = true
+                    verifyReport = "running…"
+                    coroutineScope.launch {
+                        verifyReport = try {
+                            verifyDiarizationModels(context)
+                        } catch (t: Throwable) {
+                            "verify failed: ${t::class.simpleName}: ${t.message}"
+                        } finally {
+                            verifyRunning = false
+                        }
+                    }
+                },
+                enabled = !verifyRunning,
+            ) {
+                Text(if (verifyRunning) "Verifying…" else "Verify pyannote models")
+            }
+        }
+        verifyReport?.let { report ->
+            Spacer(Modifier.size(8.dp))
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                val scrollState = rememberScrollState()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                        .verticalScroll(scrollState),
+                ) {
+                    Text(
+                        text = report,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        ),
+                    )
+                }
             }
         }
     }

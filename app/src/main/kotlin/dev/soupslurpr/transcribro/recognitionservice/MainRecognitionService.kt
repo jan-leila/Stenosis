@@ -11,6 +11,7 @@ import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.lang.System.currentTimeMillis
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -118,7 +120,7 @@ class MainRecognitionService : RecognitionService() {
                     val SPEECH_PAD_MS = 0
 
                     val model =
-                        this@MainRecognitionService.assets.open("models/silero_vad/silero_vad.with_runtime_opt.ort")
+                        this@MainRecognitionService.assets.open("models/silero_vad/silero_vad.onnx")
 
                     val modelBytes = model.readBytes()
 
@@ -138,18 +140,51 @@ class MainRecognitionService : RecognitionService() {
         )
     )
 
+    /**
+     * Set when a model fails to load (e.g. its ONNX I/O signature doesn't match what
+     * the wrapper code was written against). When non-null, [onStartListening] short-
+     * circuits with [SpeechRecognizer.ERROR_CLIENT]. The user has already seen a toast
+     * with the underlying error from [onCreate].
+     */
+    private var modelLoadError: String? = null
+
     override fun onCreate() {
         super.onCreate()
-        // Pre-load the whisper context so the first streaming pass doesn't pay
-        // model-load latency (which is large enough that VAD typically closes the
-        // segment before the first preview can emit).
+        // Pre-load both whisper and silero so first-use latency and any schema-mismatch
+        // failures surface here rather than crashing the audio loop later.
         recordAndTranscribeScope.launch {
-            whisperRepository.preload()
-            Log.i(TAG, "whisper context preloaded")
+            try {
+                whisperRepository.preload()
+                Log.i(TAG, "whisper context preloaded")
+                sileroVadRepository.preload()
+                Log.i(TAG, "silero VAD detector preloaded")
+            } catch (e: ModelSchemaMismatchException) {
+                Log.e(TAG, "model schema mismatch during preload", e)
+                modelLoadError = "${e.modelName}: ${e.details}"
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@MainRecognitionService,
+                        "Transcribro: ${e.modelName} model is incompatible. " +
+                            "Recognition disabled until the wrapper is updated.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "unexpected preload failure", e)
+                modelLoadError = "${e::class.simpleName}: ${e.message}"
+            }
         }
     }
 
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
+        // Bail out cleanly if a model failed to load earlier. The toast was already
+        // shown once at preload time; we just refuse to start recognition.
+        modelLoadError?.let { err ->
+            Log.w(TAG, "onStartListening rejected: $err")
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return
+        }
+
         val autoStopRecognition = recognizerIntent?.extras?.getBoolean(EXTRA_AUTO_STOP) ?: true
         val isPartialResults = recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS)
         val streamingEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_STREAMING) ?: true

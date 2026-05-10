@@ -18,6 +18,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
+/**
+ * MIT license body keyed on a per-dependency copyright line (e.g. `"Copyright (c) 2020 Foo"`).
+ * Apache 2.0 is a single fixed const because that license carries copyright in a separate
+ * NOTICE file rather than inlining it; MIT instead requires the copyright be part of the
+ * license text, so we parameterize.
+ */
+fun mitLicense(copyrightLine: String): String =
+    "MIT License\n" +
+    "\n" +
+    "$copyrightLine\n" +
+    "\n" +
+    "Permission is hereby granted, free of charge, to any person obtaining a copy\n" +
+    "of this software and associated documentation files (the \"Software\"), to deal\n" +
+    "in the Software without restriction, including without limitation the rights\n" +
+    "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n" +
+    "copies of the Software, and to permit persons to whom the Software is\n" +
+    "furnished to do so, subject to the following conditions:\n" +
+    "\n" +
+    "The above copyright notice and this permission notice shall be included in all\n" +
+    "copies or substantial portions of the Software.\n" +
+    "\n" +
+    "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n" +
+    "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n" +
+    "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n" +
+    "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n" +
+    "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n" +
+    "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n" +
+    "SOFTWARE."
+
 const val APACHE2LICENSE = "\n" +
         "                                 Apache License\n" +
         "                           Version 2.0, January 2004\n" +
@@ -239,81 +268,42 @@ fun CreditsScreen(
             CreditsItem(
                 dependencyName = "whisper.cpp",
                 dependencyPackageName = "https://github.com/ggerganov/whisper.cpp",
-                dependencyLicense = "MIT License\n" +
-                        "\n" +
-                        "Copyright (c) 2023-2024 The ggml authors\n" +
-                        "\n" +
-                        "Permission is hereby granted, free of charge, to any person obtaining a copy\n" +
-                        "of this software and associated documentation files (the \"Software\"), to deal\n" +
-                        "in the Software without restriction, including without limitation the rights\n" +
-                        "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n" +
-                        "copies of the Software, and to permit persons to whom the Software is\n" +
-                        "furnished to do so, subject to the following conditions:\n" +
-                        "\n" +
-                        "The above copyright notice and this permission notice shall be included in all\n" +
-                        "copies or substantial portions of the Software.\n" +
-                        "\n" +
-                        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n" +
-                        "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n" +
-                        "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n" +
-                        "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n" +
-                        "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n" +
-                        "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n" +
-                        "SOFTWARE."
+                dependencyLicense = mitLicense("Copyright (c) 2023-2024 The ggml authors"),
             )
         }
         item {
             CreditsItem(
                 dependencyName = "Silero VAD",
                 dependencyPackageName = "https://github.com/snakers4/silero-vad",
-                dependencyLicense = "MIT License\n" +
-                        "\n" +
-                        "Copyright (c) 2020-present Silero Team\n" +
-                        "\n" +
-                        "Permission is hereby granted, free of charge, to any person obtaining a copy\n" +
-                        "of this software and associated documentation files (the \"Software\"), to deal\n" +
-                        "in the Software without restriction, including without limitation the rights\n" +
-                        "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n" +
-                        "copies of the Software, and to permit persons to whom the Software is\n" +
-                        "furnished to do so, subject to the following conditions:\n" +
-                        "\n" +
-                        "The above copyright notice and this permission notice shall be included in all\n" +
-                        "copies or substantial portions of the Software.\n" +
-                        "\n" +
-                        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n" +
-                        "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n" +
-                        "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n" +
-                        "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n" +
-                        "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n" +
-                        "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n" +
-                        "SOFTWARE."
+                dependencyLicense = mitLicense("Copyright (c) 2020-present Silero Team"),
+            )
+        }
+        item {
+            CreditsItem(
+                dependencyName = "pyannote-audio (segmentation-3.0)",
+                dependencyPackageName = "https://huggingface.co/pyannote/segmentation-3.0",
+                dependencyLicense = mitLicense("Copyright (c) 2020- CNRS"),
+            )
+        }
+        item {
+            CreditsItem(
+                dependencyName = "WeSpeaker (voxceleb resnet34 LM)",
+                dependencyPackageName = "https://github.com/wenet-e2e/wespeaker",
+                dependencyLicense = APACHE2LICENSE,
+            )
+        }
+        item {
+            CreditsItem(
+                dependencyName = "sherpa-onnx (model exports for pyannote and WeSpeaker)",
+                dependencyPackageName = "https://github.com/k2-fsa/sherpa-onnx",
+                dependencyLicense = APACHE2LICENSE,
             )
         }
         item {
             CreditsItem(
                 dependencyName = "ONNX Runtime Android",
                 dependencyPackageName = "com.microsoft.onnxruntime:onnxruntime-android",
-                dependencyLicense = "MIT License\n" +
-                        "\n" +
-                        "Copyright (c) Microsoft Corporation\n" +
-                        "\n" +
-                        "Permission is hereby granted, free of charge, to any person obtaining a copy\n" +
-                        "of this software and associated documentation files (the \"Software\"), to deal\n" +
-                        "in the Software without restriction, including without limitation the rights\n" +
-                        "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n" +
-                        "copies of the Software, and to permit persons to whom the Software is\n" +
-                        "furnished to do so, subject to the following conditions:\n" +
-                        "\n" +
-                        "The above copyright notice and this permission notice shall be included in all\n" +
-                        "copies or substantial portions of the Software.\n" +
-                        "\n" +
-                        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n" +
-                        "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n" +
-                        "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n" +
-                        "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n" +
-                        "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n" +
-                        "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n" +
-                        "SOFTWARE."
+                dependencyLicense = mitLicense("Copyright (c) Microsoft Corporation"),
             )
         }
         item {

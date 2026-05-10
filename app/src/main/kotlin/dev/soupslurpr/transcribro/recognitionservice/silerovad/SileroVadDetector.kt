@@ -64,18 +64,32 @@ class SileroVadDetector(
 
     // apply method for processing the audio array, returning possible speech start or end times
     fun apply(audioData: FloatArray, returnSeconds: Boolean): Map<String, Double> {
-        // Get the length of the audio array as the window size
-        val windowSizeSamples = audioData.size
-        // Update the current sample count
-        currentSample += windowSizeSamples
+        currentSample += audioData.size
 
-        // Call the model to get the prediction probability of speech
-        var speechProb = 0f
-        try {
-            speechProb = model.call(arrayOf(audioData), samplingRate)[0]
-        } catch (e: OrtException) {
-            throw RuntimeException(e)
+        // v5+ silero must be called with exactly FRAME_SIZE samples per inference. The
+        // audio buffer arriving here is whatever AudioRecord delivered (typically several
+        // thousand samples), so chunk it. We aggregate the per-frame probabilities by
+        // taking the max — if any frame in this buffer crosses the start threshold we
+        // want to fire `start`; if every frame is below the end threshold we should fire
+        // `end` after enough silence accumulates.
+        val frameSize = SileroVadOnnxModel.frameSize(samplingRate)
+        var maxProb = 0f
+        var idx = 0
+        while (idx + frameSize <= audioData.size) {
+            val frame = audioData.copyOfRange(idx, idx + frameSize)
+            val prob = try {
+                model.call(arrayOf(frame), samplingRate)[0]
+            } catch (e: OrtException) {
+                throw RuntimeException(e)
+            }
+            if (prob > maxProb) maxProb = prob
+            idx += frameSize
         }
+        // Trailing samples that don't fill a full frame are discarded for now. At 16kHz
+        // that's at most 31ms of audio per buffer — negligible.
+        if (idx == 0) return emptyMap()
+
+        val speechProb = maxProb
 
         // If the speech probability is greater than the threshold and the temporary end time is not 0, reset the temporary end time
         // This indicates that the speech duration has exceeded expectations and needs to recalculate the end time
