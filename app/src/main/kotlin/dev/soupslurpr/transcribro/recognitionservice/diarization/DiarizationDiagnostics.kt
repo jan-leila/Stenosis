@@ -136,7 +136,91 @@ suspend fun verifyDiarizationModels(context: Context): String = withContext(Disp
         }
     }
 
+    line("")
+    runSpeakerRegistryTest(::line)
+    line("")
+    runSpeakerLabelStoreTest(::line)
+
     log.toString().trimEnd()
+}
+
+/**
+ * Smoke-test [SpeakerRegistry] with synthetic embeddings. Random 256-dim unit vectors
+ * are approximately orthogonal so they cluster as separate speakers; small jitter
+ * around a centroid stays within the same-speaker threshold. Deterministic via seed.
+ */
+private fun runSpeakerRegistryTest(line: (String) -> Unit) {
+    line("[registry] testing SpeakerRegistry with synthetic embeddings...")
+    val registry = SpeakerRegistry()
+    val rng = java.util.Random(42L)
+
+    val speakerA = randomUnitVector(PyannoteEmbedderOnnxModel.EMBEDDING_DIM, rng)
+    val speakerB = randomUnitVector(PyannoteEmbedderOnnxModel.EMBEDDING_DIM, rng)
+    val baseDist = SpeakerRegistry.cosineDistance(speakerA, speakerB)
+    line("[registry]   A vs B cosine distance: ${"%.3f".format(baseDist)} (random 256-dim vectors are ≈orthogonal ≈1.0)")
+
+    // sigma=0.05 puts pairwise same-speaker cosine distance at ~0.4 — close to the
+    // 0.5 threshold but reliably under it, which mirrors what real wespeaker
+    // same-speaker pairs look like (~0.1–0.3 in practice). At sigma=0.1 the variance
+    // pushes pairwise distances above 0.7 and they stop clustering, which is a test-
+    // setup artifact, not a registry bug.
+    val aSamples = (0 until 3).map { jitter(speakerA, 0.05f, rng) }
+    val bSamples = (0 until 3).map { jitter(speakerB, 0.05f, rng) }
+
+    // Sanity-check the synthetic geometry — if these are above the threshold the
+    // clustering test will fail and we want to know why before chasing a bug in
+    // SpeakerRegistry itself.
+    val sameSpeakerDist = SpeakerRegistry.cosineDistance(aSamples[0], aSamples[1])
+    val crossSpeakerDist = SpeakerRegistry.cosineDistance(aSamples[0], bSamples[0])
+    line("[registry]   same-speaker pair distance: ${"%.3f".format(sameSpeakerDist)} (must be < ${"%.2f".format(SpeakerRegistry.DEFAULT_THRESHOLD)} for the test to pass)")
+    line("[registry]   cross-speaker pair distance: ${"%.3f".format(crossSpeakerDist)} (must be > ${"%.2f".format(SpeakerRegistry.DEFAULT_THRESHOLD)} for the test to pass)")
+
+    val ids = listOf(
+        registry.assign(aSamples[0]),
+        registry.assign(bSamples[0]),
+        registry.assign(aSamples[1]),
+        registry.assign(bSamples[1]),
+        registry.assign(aSamples[2]),
+        registry.assign(bSamples[2]),
+    )
+    val expected = listOf(0, 1, 0, 1, 0, 1)
+    val clusterOk = ids == expected
+    line("[registry]   assigned ids: $ids (expected $expected) ${if (clusterOk) "✓" else "✗"}")
+    line("[registry]   total speakers: ${registry.size} (expected 2)")
+
+    registry.reset()
+    line("[registry]   after reset: size=${registry.size} (expected 0)")
+}
+
+private fun runSpeakerLabelStoreTest(line: (String) -> Unit) {
+    line("[labels] testing SpeakerLabelStore...")
+    val store = SpeakerLabelStore()
+    line("[labels]   default(0)='${store.displayName(0)}' (expected 'Speaker 1')")
+    line("[labels]   default(2)='${store.displayName(2)}' (expected 'Speaker 3')")
+    store.rename(0, "Alice")
+    line("[labels]   rename(0, 'Alice') ⇒ default(0)='${store.displayName(0)}'")
+    store.bulkRename(mapOf(1 to "Bob", 2 to "Carol"))
+    line("[labels]   bulkRename: 0='${store.displayName(0)}' 1='${store.displayName(1)}' 2='${store.displayName(2)}' 3='${store.displayName(3)}'")
+    store.reset()
+    line("[labels]   after reset: default(0)='${store.displayName(0)}' (expected 'Speaker 1')")
+}
+
+private fun randomUnitVector(dim: Int, rng: java.util.Random): FloatArray {
+    val v = FloatArray(dim) { rng.nextGaussian().toFloat() }
+    var sumSq = 0.0
+    for (x in v) sumSq += x * x
+    val norm = sqrt(sumSq).toFloat()
+    if (norm > 0f) for (i in v.indices) v[i] /= norm
+    return v
+}
+
+private fun jitter(base: FloatArray, sigma: Float, rng: java.util.Random): FloatArray {
+    val v = FloatArray(base.size) { base[it] + (rng.nextGaussian() * sigma).toFloat() }
+    var sumSq = 0.0
+    for (x in v) sumSq += x * x
+    val norm = sqrt(sumSq).toFloat()
+    if (norm > 0f) for (i in v.indices) v[i] /= norm
+    return v
 }
 
 private fun l2Norm(v: FloatArray): Double {

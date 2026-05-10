@@ -1,4 +1,4 @@
-package dev.soupslurpr.transcribro.ui.test_transcription
+package dev.soupslurpr.transcribro.ui.transcribe
 
 import android.Manifest
 import android.content.ComponentName
@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,25 +38,30 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import dev.soupslurpr.transcribro.dataStore
+import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
-import dev.soupslurpr.transcribro.recognitionservice.diarization.verifyDiarizationModels
-import kotlinx.coroutines.launch
+import dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerLabelStore
 
 /**
- * Test transcription view. Bypasses the IME entirely and drives MainRecognitionService
- * directly — useful for trying transcription without enabling the keyboard.
+ * Transcription view. Drives [MainRecognitionService] directly without going through
+ * the IME — useful for trying transcription, dictation-style note-taking, or any case
+ * where you don't want voice input bound to a text field.
  *
- * - Tap the button to start/stop continuous recognition.
- * - Segment-final partials get appended to the committed buffer.
- * - Streaming previews show in italic at the tail and are replaced when the segment-final lands.
+ * - Tap the start/stop button to begin / end recognition.
+ * - In default VAD mode, segment-final partials get appended inline; streaming
+ *   previews show in italic at the tail.
+ * - In diarization mode (enabled in Settings), each segment-final partial carries a
+ *   speaker id; the screen looks the display name up via [SpeakerLabelStore] and
+ *   renders one line per speaker turn.
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun TestTranscriptionScreen() {
+fun TranscribeScreen() {
     val context = LocalContext.current
 
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
@@ -66,9 +72,16 @@ fun TestTranscriptionScreen() {
     var livePreview by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("idle") }
 
-    val coroutineScope = rememberCoroutineScope()
-    var verifyReport by remember { mutableStateOf<String?>(null) }
-    var verifyRunning by remember { mutableStateOf(false) }
+    val preferencesViewModel: PreferencesViewModel = viewModel(
+        factory = PreferencesViewModel.PreferencesViewModelFactory(context.dataStore),
+    )
+    val preferencesUiState by preferencesViewModel.uiState.collectAsState()
+    val diarizationEnabled = preferencesUiState.diarizationEnabled.second.value
+
+    // Per-screen label store. When we wire renaming later (e.g. LLM-driven speaker
+    // naming after a session), this is the surface that pulls names from. For now it
+    // just gives us "Speaker 1" / "Speaker 2" defaults.
+    val speakerLabelStore = remember { SpeakerLabelStore() }
 
     DisposableEffect(Unit) {
         val r = SpeechRecognizer.createSpeechRecognizer(
@@ -100,9 +113,10 @@ fun TestTranscriptionScreen() {
             }
 
             override fun onResults(results: Bundle?) {
-                // The service emits each segment as a non-streaming partial which we already
-                // appended to committedBuffer. onResults arrives at the end with the FULL
-                // joined transcript — so replace, don't append (otherwise we double-print).
+                // The service emits each segment as a non-streaming partial which we
+                // already appended to committedBuffer. onResults arrives at the end with
+                // the FULL joined transcript — replace rather than append (otherwise we
+                // double-print).
                 val finalText = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
@@ -128,12 +142,28 @@ fun TestTranscriptionScreen() {
                     .orEmpty()
                 if (isStreamingPreview) {
                     livePreview = text.trim()
-                } else {
-                    if (text.isNotBlank()) {
-                        committedBuffer = appendSegment(committedBuffer, text)
-                    }
-                    livePreview = ""
+                    return
                 }
+
+                if (text.isBlank()) {
+                    livePreview = ""
+                    return
+                }
+
+                // Segment-final partial. In diarization mode the bundle also carries a
+                // speaker id; we look up the display name via the label store and prefix
+                // the line. In VAD mode there's no speaker id and we append inline.
+                val speakerId = if (partialResults.containsKey(MainRecognitionService.RESULTS_SPEAKER_ID)) {
+                    partialResults.getInt(MainRecognitionService.RESULTS_SPEAKER_ID)
+                } else null
+
+                committedBuffer = if (speakerId != null) {
+                    val label = speakerLabelStore.displayName(speakerId)
+                    appendSpeakerLine(committedBuffer, label, text)
+                } else {
+                    appendSegment(committedBuffer, text)
+                }
+                livePreview = ""
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -171,6 +201,7 @@ fun TestTranscriptionScreen() {
                                 // Long-form recognition: don't auto-stop on first VAD end.
                                 putExtra(MainRecognitionService.EXTRA_AUTO_STOP, false)
                                 putExtra(MainRecognitionService.EXTRA_STREAMING, true)
+                                putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarizationEnabled)
                             }
                         )
                     }
@@ -199,9 +230,8 @@ fun TestTranscriptionScreen() {
         ElevatedCard(
             modifier = Modifier
                 .fillMaxWidth()
-                // Take whatever vertical space is left after the buttons + verify panel,
-                // so the transcript scrolls inside the card instead of pushing siblings
-                // below the screen.
+                // Bound the transcript card so it scrolls inside this height rather than
+                // pushing the buttons off the bottom of the screen.
                 .weight(1f),
         ) {
             val scrollState = rememberScrollState()
@@ -218,47 +248,6 @@ fun TestTranscriptionScreen() {
                 )
             }
         }
-        Spacer(Modifier.size(12.dp))
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            OutlinedButton(
-                onClick = {
-                    if (verifyRunning) return@OutlinedButton
-                    verifyRunning = true
-                    verifyReport = "running…"
-                    coroutineScope.launch {
-                        verifyReport = try {
-                            verifyDiarizationModels(context)
-                        } catch (t: Throwable) {
-                            "verify failed: ${t::class.simpleName}: ${t.message}"
-                        } finally {
-                            verifyRunning = false
-                        }
-                    }
-                },
-                enabled = !verifyRunning,
-            ) {
-                Text(if (verifyRunning) "Verifying…" else "Verify pyannote models")
-            }
-        }
-        verifyReport?.let { report ->
-            Spacer(Modifier.size(8.dp))
-            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                val scrollState = rememberScrollState()
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                        .verticalScroll(scrollState),
-                ) {
-                    Text(
-                        text = report,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        ),
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -266,6 +255,13 @@ private fun appendSegment(existing: String, segment: String): String {
     val trimmed = segment.trim()
     if (trimmed.isEmpty()) return existing
     return if (existing.isEmpty()) trimmed else "$existing $trimmed"
+}
+
+private fun appendSpeakerLine(existing: String, speakerLabel: String, segment: String): String {
+    val trimmed = segment.trim()
+    if (trimmed.isEmpty()) return existing
+    val line = "$speakerLabel: $trimmed"
+    return if (existing.isEmpty()) line else "$existing\n$line"
 }
 
 @Composable

@@ -58,7 +58,7 @@ import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import dev.soupslurpr.transcribro.ui.action_recognize_speech.ActionRecognizeSpeechScreen
 import dev.soupslurpr.transcribro.ui.donate.DonateStartScreen
-import dev.soupslurpr.transcribro.ui.test_transcription.TestTranscriptionScreen
+import dev.soupslurpr.transcribro.ui.transcribe.TranscribeScreen
 import dev.soupslurpr.transcribro.ui.settings.CreditsScreen
 import dev.soupslurpr.transcribro.ui.settings.LicenseScreen
 import dev.soupslurpr.transcribro.ui.settings.PrivacyPolicyScreen
@@ -78,14 +78,14 @@ enum class TranscribroAppScreens(@StringRes val title: Int) {
     SettingsCredits(title = R.string.credits),
     Donate(title = R.string.donate),
     DonateStart(title = R.string.donate),
-    TestTranscription(title = R.string.test_transcription),
-    TestTranscriptionStart(title = R.string.test_transcription),
+    Transcribe(title = R.string.transcribe),
+    TranscribeStart(title = R.string.transcribe),
 }
 
 val navBarScreens = listOf(
     TranscribroAppScreens.Start,
     TranscribroAppScreens.Settings,
-    TranscribroAppScreens.TestTranscription,
+    TranscribroAppScreens.Transcribe,
     TranscribroAppScreens.Donate,
 )
 
@@ -195,7 +195,7 @@ fun TranscribroApp(
                                         contentDescription = null
                                     )
 
-                                    TranscribroAppScreens.TestTranscription -> Icon(
+                                    TranscribroAppScreens.Transcribe -> Icon(
                                         imageVector = if (navBarSelected == navBarScreen) {
                                             Icons.Filled.Mic
                                         } else {
@@ -320,13 +320,13 @@ fun TranscribroApp(
                 }
             }
             navigationWithDefaultSlideTransitions(
-                route = TranscribroAppScreens.TestTranscription,
-                startDestination = TranscribroAppScreens.TestTranscriptionStart.name,
+                route = TranscribroAppScreens.Transcribe,
+                startDestination = TranscribroAppScreens.TranscribeStart.name,
             ) {
                 composableWithDefaultSlideTransitions(
-                    route = TranscribroAppScreens.TestTranscriptionStart
+                    route = TranscribroAppScreens.TranscribeStart
                 ) {
-                    TestTranscriptionScreen()
+                    TranscribeScreen()
                 }
             }
         }

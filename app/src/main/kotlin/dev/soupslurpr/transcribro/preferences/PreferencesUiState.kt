@@ -47,5 +47,16 @@ data class PreferencesUiState(
     val streamingTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("STREAMING_TRANSCRIPTION")),
         mutableStateOf(true)
+    ),
+
+    /**
+     * Whether to run speaker diarization (pyannote + wespeaker) and label each
+     * committed segment with a speaker id. Off by default — adds ~30MB of model RAM
+     * and segments only commit after a per-speaker silence window, so the live UX
+     * differs noticeably from the default VAD-driven flow.
+     */
+    val diarizationEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        (booleanPreferencesKey("DIARIZATION_ENABLED")),
+        mutableStateOf(false)
     )
 )

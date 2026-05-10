@@ -77,13 +77,15 @@ class PyannoteSegmenterOnnxModel(modelBytes: ByteArray) {
 
     private fun decodePowerset(frames: Array<FloatArray>): SegmentationResult {
         val activity = Array(frames.size) { BooleanArray(NUM_LOCAL_SPEAKERS) }
+        val classHist = IntArray(POWERSET_CLASSES.size)
         for (i in frames.indices) {
             val classIdx = argmax(frames[i])
+            classHist[classIdx]++
             for (sp in POWERSET_CLASSES[classIdx]) {
                 activity[i][sp] = true
             }
         }
-        return SegmentationResult(activity)
+        return SegmentationResult(activity, classHist)
     }
 
     private fun argmax(arr: FloatArray): Int {
@@ -128,9 +130,14 @@ class PyannoteSegmenterOnnxModel(modelBytes: ByteArray) {
 /**
  * Per-frame, per-(local)-speaker activity output of [PyannoteSegmenterOnnxModel.segment].
  * `activity[frame][localSpeaker] == true` ⇒ that local speaker is talking at that frame.
+ *
+ * [classHistogram] counts how many frames each powerset class was the argmax for, indexed
+ * by class id (silent, {0}, {1}, {2}, {0,1}, {0,2}, {1,2}). Useful for diagnosing whether
+ * the model is producing varied outputs or collapsing into a single class.
  */
 data class SegmentationResult(
     val activity: Array<BooleanArray>,
+    val classHistogram: IntArray,
 ) {
     val numFrames: Int get() = activity.size
     val numLocalSpeakers: Int get() = if (activity.isNotEmpty()) activity[0].size else 0
@@ -138,11 +145,28 @@ data class SegmentationResult(
     /** True if any local speaker is active at the given frame. */
     fun isAnySpeechAt(frame: Int): Boolean = activity[frame].any { it }
 
+    /**
+     * True if [localSpeaker] is the only active speaker at [frame]. Used by the embedder
+     * to extract clean single-speaker audio — wespeaker embeddings are very sensitive to
+     * background voice content, and including overlap frames (powerset classes 4/5/6)
+     * shifts the embedding toward the mixture, spawning phantom speakers in the registry.
+     */
+    fun isExclusiveAt(frame: Int, localSpeaker: Int): Boolean {
+        val row = activity[frame]
+        if (!row[localSpeaker]) return false
+        for (other in row.indices) {
+            if (other != localSpeaker && row[other]) return false
+        }
+        return true
+    }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is SegmentationResult) return false
-        return activity.contentDeepEquals(other.activity)
+        return activity.contentDeepEquals(other.activity) &&
+            classHistogram.contentEquals(other.classHistogram)
     }
 
-    override fun hashCode(): Int = activity.contentDeepHashCode()
+    override fun hashCode(): Int =
+        31 * activity.contentDeepHashCode() + classHistogram.contentHashCode()
 }

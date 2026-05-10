@@ -89,6 +89,14 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .streamingTranscription.second.value
                         )
+                    ),
+                    diarizationEnabled = Pair(
+                        uiState.value.diarizationEnabled.first,
+                        mutableStateOf(
+                            preferences[uiState.value.diarizationEnabled
+                                .first] ?: uiState.value
+                                .diarizationEnabled.second.value
+                        )
                     )
                 )
             }

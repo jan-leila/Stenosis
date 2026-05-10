@@ -155,6 +155,8 @@ class VoiceInput : InputMethodService() {
 
             val streamingTranscription by preferencesUiState.streamingTranscription.second
 
+            val diarizationEnabled by preferencesUiState.diarizationEnabled.second
+
             val snackbarHostState = remember { SnackbarHostState() }
 
             val snackbarCoroutine = rememberCoroutineScope()
@@ -478,7 +480,8 @@ class VoiceInput : InputMethodService() {
                                                 speechRecognizer.value!!.startListening(
                                                     getStartListeningIntent(
                                                         autoStopRecognition,
-                                                        streamingTranscription
+                                                        streamingTranscription,
+                                                        diarizationEnabled,
                                                     )
                                                 )
                                             }
@@ -584,7 +587,8 @@ class VoiceInput : InputMethodService() {
                                                         speechRecognizer.value?.startListening(
                                                             getStartListeningIntent(
                                                                 autoStopRecognition,
-                                                                streamingTranscription
+                                                                streamingTranscription,
+                                                                diarizationEnabled,
                                                             )
                                                         )
                                                     }
@@ -986,11 +990,16 @@ class VoiceInput : InputMethodService() {
         speechRecognizer.value = null
     }
 
-    private fun getStartListeningIntent(longForm: Boolean, streaming: Boolean): Intent {
+    private fun getStartListeningIntent(
+        longForm: Boolean,
+        streaming: Boolean,
+        diarization: Boolean,
+    ): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(MainRecognitionService.EXTRA_AUTO_STOP, longForm)
             putExtra(MainRecognitionService.EXTRA_STREAMING, streaming)
+            putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarization)
         }
     }
 }

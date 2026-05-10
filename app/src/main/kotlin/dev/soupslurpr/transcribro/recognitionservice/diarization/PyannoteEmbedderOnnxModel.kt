@@ -60,8 +60,22 @@ class PyannoteEmbedderOnnxModel(
         val feats = fbank.compute(audio)
         require(feats.isNotEmpty()) { "fbank produced 0 frames for ${audio.size}-sample input" }
 
+        // Cepstral mean subtraction — match wespeaker's reference extraction pipeline
+        // (`feats = feats - feats.mean(axis=0)` in cli/extractor.py). Without this, the
+        // embedding encodes channel/volume/room-acoustic information common to all
+        // voices in the same recording, collapsing cross-speaker cosine distances. We
+        // saw distinct voices clustering at ~0.31 before this was added; with CMVN they
+        // separate to the wespeaker-published ~0.6+ range.
         val numFrames = feats.size
         val numBins = feats[0].size
+        val featMean = FloatArray(numBins)
+        for (frame in feats) {
+            for (b in 0 until numBins) featMean[b] += frame[b]
+        }
+        for (b in 0 until numBins) featMean[b] /= numFrames
+        for (frame in feats) {
+            for (b in 0 until numBins) frame[b] -= featMean[b]
+        }
 
         // ONNX input: [1, T, 80]
         val input = arrayOf(feats)

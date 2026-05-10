@@ -17,6 +17,16 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whispercpp.whisper.WhisperContext
+import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationManager
+import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationRepository
+import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteEmbedderApi
+import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteEmbedderLocalDataSource
+import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteEmbedderOnnxModel
+import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterApi
+import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterLocalDataSource
+import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterOnnxModel
+import dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerRegistry
+import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationAssets
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadApi
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadDetector
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadLocalDataSource
@@ -45,6 +55,10 @@ class MainRecognitionService : RecognitionService() {
     companion object {
         const val EXTRA_AUTO_STOP = "dev.soupslurpr.transcribro.EXTRA_AUTO_STOP"
         const val EXTRA_STREAMING = "dev.soupslurpr.transcribro.EXTRA_STREAMING"
+        const val EXTRA_DIARIZATION = "dev.soupslurpr.transcribro.EXTRA_DIARIZATION"
+        // Speaker id (Int) attached to a partial bundle when diarization is on.
+        // The display name lookup happens on the receiver via SpeakerLabelStore.
+        const val RESULTS_SPEAKER_ID = "dev.soupslurpr.transcribro.RESULTS_SPEAKER_ID"
         // Marks a partialResults bundle as a live streaming preview that the IME
         // should render with setComposingText (and finalize when the segment-final partial arrives).
         const val RESULTS_STREAMING_PARTIAL = "dev.soupslurpr.transcribro.RESULTS_STREAMING_PARTIAL"
@@ -57,6 +71,12 @@ class MainRecognitionService : RecognitionService() {
         // (run when VAD detects end-of-speech) still sees the entire segment.
         private const val STREAMING_WINDOW_SAMPLES = 10 * 16000
         private const val TAG = "MainRecognitionService"
+
+        // RMS amplitude (int16) below which we consider the streaming snapshot "silent"
+        // and skip the whisper pass. Without this, whisper hallucinates plausible-
+        // sounding nonsense on quiet audio ("you know what they..." / "♪♪") and the
+        // preview displays it as if it were real speech.
+        private const val STREAMING_SILENCE_RMS_THRESHOLD = 300f
 
         // Adaptive audio_ctx (whisper encoder context length) — smaller is faster, less accurate.
         // We tune it so the streaming partial lands roughly STREAMING_TARGET_STALENESS_MS after
@@ -140,6 +160,38 @@ class MainRecognitionService : RecognitionService() {
         )
     )
 
+    // Diarization is opt-in (via the diarizationEnabled preference / EXTRA_DIARIZATION
+    // intent extra) — its models are loaded on first use only, not at service onCreate.
+    private val diarizationRepository = DiarizationRepository(
+        segmenterDataSource = PyannoteSegmenterLocalDataSource(
+            api = object : PyannoteSegmenterApi {
+                override fun getSegmenter(): PyannoteSegmenterOnnxModel {
+                    val bytes = this@MainRecognitionService.assets
+                        .open(DiarizationAssets.SEGMENTATION_ASSET)
+                        .use { it.readBytes() }
+                    return PyannoteSegmenterOnnxModel(bytes)
+                }
+            },
+            ioDispatcher = Dispatchers.IO,
+        ),
+        embedderDataSource = PyannoteEmbedderLocalDataSource(
+            api = object : PyannoteEmbedderApi {
+                override fun getEmbedder(): PyannoteEmbedderOnnxModel {
+                    val bytes = this@MainRecognitionService.assets
+                        .open(DiarizationAssets.EMBEDDER_ASSET)
+                        .use { it.readBytes() }
+                    return PyannoteEmbedderOnnxModel(bytes)
+                }
+            },
+            ioDispatcher = Dispatchers.IO,
+        ),
+    )
+
+    // Persistent speaker registry across recognition sessions. Reset on service teardown
+    // (or, in future, on an explicit user gesture). DiarizationManager.reset() also
+    // resets this registry when the manager itself is reset.
+    private val speakerRegistry = SpeakerRegistry()
+
     /**
      * Set when a model fails to load (e.g. its ONNX I/O signature doesn't match what
      * the wrapper code was written against). When non-null, [onStartListening] short-
@@ -150,14 +202,18 @@ class MainRecognitionService : RecognitionService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Pre-load both whisper and silero so first-use latency and any schema-mismatch
-        // failures surface here rather than crashing the audio loop later.
+        // Pre-load whisper, silero, and the diarization models so first-use latency and
+        // any schema-mismatch failures surface here rather than crashing the audio loop
+        // later. Diarization adds ~30MB of RAM, but doing it here means the user gets
+        // immediate startup with a toast on failure (no explicit "verify" button needed).
         recordAndTranscribeScope.launch {
             try {
                 whisperRepository.preload()
                 Log.i(TAG, "whisper context preloaded")
                 sileroVadRepository.preload()
                 Log.i(TAG, "silero VAD detector preloaded")
+                diarizationRepository.preload()
+                Log.i(TAG, "diarization models preloaded")
             } catch (e: ModelSchemaMismatchException) {
                 Log.e(TAG, "model schema mismatch during preload", e)
                 modelLoadError = "${e.modelName}: ${e.details}"
@@ -188,9 +244,14 @@ class MainRecognitionService : RecognitionService() {
         val autoStopRecognition = recognizerIntent?.extras?.getBoolean(EXTRA_AUTO_STOP) ?: true
         val isPartialResults = recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS)
         val streamingEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_STREAMING) ?: true
+        val diarizationEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_DIARIZATION) ?: false
         val speechStartPadMs = 24000
 
-        Log.i(TAG, "onStartListening: streamingEnabled=$streamingEnabled isPartialResults=$isPartialResults")
+        Log.i(
+            TAG,
+            "onStartListening: streamingEnabled=$streamingEnabled " +
+                "isPartialResults=$isPartialResults diarizationEnabled=$diarizationEnabled"
+        )
 
         val streamingInFlight = AtomicBoolean(false)
         var lastStreamedSize = 0
@@ -328,6 +389,16 @@ class MainRecognitionService : RecognitionService() {
 
 
         var totalTranscriptionTime = 0L
+
+        if (diarizationEnabled) {
+            recordAndTranscribeJob = startDiarizationFlow(
+                audioRecord = audioRecord,
+                bufferSize = bufferSize,
+                isPartialResults = isPartialResults == true,
+                listener = listener,
+            )
+            return
+        }
 
         recordAndTranscribeJob = recordAndTranscribeScope.launch recordAndTranscribe@{
             audioRecord.startRecording()
@@ -719,6 +790,16 @@ class MainRecognitionService : RecognitionService() {
         stopListening = true
     }
 
+    private fun computeRms(samples: ShortArray): Float {
+        if (samples.isEmpty()) return 0f
+        var sumSq = 0.0
+        for (s in samples) {
+            val v = s.toDouble()
+            sumSq += v * v
+        }
+        return kotlin.math.sqrt(sumSq / samples.size).toFloat()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         recordAndTranscribeJob?.cancel()
@@ -731,6 +812,262 @@ class MainRecognitionService : RecognitionService() {
         runBlocking {
             whisperRepository.release()
             sileroVadRepository.release()
+        }
+        diarizationRepository.release()
+    }
+
+    /**
+     * Diarization-mode audio loop. Replaces the VAD-driven recordAndTranscribe path
+     * when [EXTRA_DIARIZATION] is true. Each AudioRecord buffer is fed straight into
+     * a [DiarizationManager]; the manager emits per-speaker segment-closed events,
+     * which we transcribe with the high-quality whisper context and surface as
+     * partial bundles tagged with [RESULTS_SPEAKER_ID].
+     */
+    private fun startDiarizationFlow(
+        audioRecord: AudioRecord,
+        bufferSize: Int,
+        isPartialResults: Boolean,
+        listener: Callback?,
+    ): Job = recordAndTranscribeScope.launch diarize@{
+        isRecording.set(true)
+        stopListening = false
+        transcribeJobs.clear()
+        streamingJobs.clear()
+
+        listener?.readyForSpeech(Bundle())
+
+        val segmenter: PyannoteSegmenterOnnxModel
+        val embedder: PyannoteEmbedderOnnxModel
+        try {
+            segmenter = diarizationRepository.getSegmenter()
+            embedder = diarizationRepository.getEmbedder()
+            Log.i(TAG, "diarization models ready")
+        } catch (e: ModelSchemaMismatchException) {
+            Log.e(TAG, "diarization model schema mismatch", e)
+            modelLoadError = "${e.modelName}: ${e.details}"
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    this@MainRecognitionService,
+                    "Transcribro: diarization disabled — ${e.modelName} model incompatible.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            audioRecord.release()
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return@diarize
+        } catch (e: Throwable) {
+            Log.e(TAG, "failed to load diarization models", e)
+            audioRecord.release()
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return@diarize
+        }
+
+        // Reset per-session state: each new diarization session starts speaker numbering
+        // from 0. (The label store in the UI also resets via its own subscription.)
+        speakerRegistry.reset()
+
+        // Collect committed speaker segments so we can assemble a final transcript when
+        // recognition ends. Append-only; the recordAndTranscribe coroutine is the sole
+        // writer and onResults reads it once at the end.
+        data class CommittedTurn(val speakerId: Int, val text: String)
+        val committed = mutableListOf<CommittedTurn>()
+
+        // The rolling 10-second audio window still contains audio that's already been
+        // committed as a per-speaker segment. The streaming preview should not re-show
+        // that audio, so we track the most-recent committed boundary and trim the
+        // streaming snapshot to start from there.
+        var lastCommitEndSample = 0L
+
+        val manager = DiarizationManager(
+            segmenter = segmenter,
+            embedder = embedder,
+            registry = speakerRegistry,
+            onSegmentClosed = { event ->
+                if (event.sampleRangeEnd > lastCommitEndSample) {
+                    lastCommitEndSample = event.sampleRangeEnd
+                }
+                val job = transcribeScope.launch {
+                    val text = whisperRepository.transcribeAudio(event.audio).trim()
+                    if (text.isBlank()) return@launch
+                    synchronized(committed) {
+                        committed += CommittedTurn(event.globalSpeakerId, text)
+                    }
+                    if (!isPartialResults) return@launch
+                    val bundle = Bundle().apply {
+                        putStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION,
+                            arrayListOf(text),
+                        )
+                        putInt(RESULTS_SPEAKER_ID, event.globalSpeakerId)
+                    }
+                    try {
+                        listener?.partialResults(bundle)
+                    } catch (e: RemoteException) {
+                        Log.w(TAG, "partialResults RemoteException", e)
+                    }
+                }
+                transcribeJobs.add(job)
+            },
+        )
+
+        // Run a streaming preview alongside diarization so the user gets live feedback
+        // during recording (same UX as the VAD flow). The streaming pass is unlabeled —
+        // labeled commits land separately as the per-speaker segments close.
+        val streamingInFlight = AtomicBoolean(false)
+        var samplesSinceLastStreaming = 0L
+        var streamingAudioCtx = STREAMING_AUDIO_CTX_INITIAL
+
+        try {
+            audioRecord.startRecording()
+            while (isRecording.get() && isActive) {
+                val buffer = ShortArray(bufferSize)
+                val n = audioRecord.read(buffer, 0, bufferSize)
+                if (n > 0) {
+                    val chunk = if (n == bufferSize) buffer else buffer.copyOf(n)
+                    manager.process(chunk)
+                    samplesSinceLastStreaming += chunk.size
+
+                    // Streaming preview every ~1s, on whatever audio is in the rolling
+                    // window (which is also what DiarizationManager segments on).
+                    if (isPartialResults &&
+                        samplesSinceLastStreaming >= STREAMING_TRIGGER_SAMPLES &&
+                        !streamingInFlight.get()
+                    ) {
+                        val rawSnapshot = manager.snapshotWindow()
+                        val totalSamplesSeen = manager.samplesSeen()
+                        val windowStartSample = totalSamplesSeen - rawSnapshot.size
+                        // Skip audio that the user has already seen as a committed
+                        // speaker segment. If the whole window is older than the last
+                        // commit, there's nothing new to preview.
+                        val skipFromStart = (lastCommitEndSample - windowStartSample)
+                            .coerceAtLeast(0)
+                            .coerceAtMost(rawSnapshot.size.toLong())
+                            .toInt()
+                        val snapshot = if (skipFromStart in 1 until rawSnapshot.size) {
+                            rawSnapshot.copyOfRange(skipFromStart, rawSnapshot.size)
+                        } else if (skipFromStart >= rawSnapshot.size) {
+                            ShortArray(0)
+                        } else {
+                            rawSnapshot
+                        }
+                        // Suppress whisper on silent audio (avoids hallucinations like
+                        // "you know what they…" / "♪♪" that surface after a speaker
+                        // commits and the window's contents are mostly silence).
+                        val rms = if (snapshot.size >= STREAMING_TRIGGER_SAMPLES) computeRms(snapshot) else 0f
+                        if (snapshot.size >= STREAMING_TRIGGER_SAMPLES &&
+                            rms < STREAMING_SILENCE_RMS_THRESHOLD
+                        ) {
+                            samplesSinceLastStreaming = 0L
+                            if (isPartialResults) {
+                                // Blank streaming partial clears any residual preview.
+                                val bundle = Bundle().apply {
+                                    putStringArrayList(
+                                        SpeechRecognizer.RESULTS_RECOGNITION,
+                                        arrayListOf(""),
+                                    )
+                                    putBoolean(RESULTS_STREAMING_PARTIAL, true)
+                                }
+                                try {
+                                    listener?.partialResults(bundle)
+                                } catch (e: RemoteException) {
+                                    Log.w(TAG, "diarization silence-clear RemoteException", e)
+                                }
+                            }
+                        } else if (snapshot.size >= STREAMING_TRIGGER_SAMPLES) {
+                            samplesSinceLastStreaming = 0L
+                            val ctxForThisPass = streamingAudioCtx
+                            val launchedAtMs = currentTimeMillis()
+                            streamingInFlight.set(true)
+                            val streamingJob = transcribeScope.launch streaming@{
+                                try {
+                                    val text = whisperRepository.transcribePartialAudio(
+                                        snapshot,
+                                        ctxForThisPass,
+                                    ).trim()
+                                    val staleness = currentTimeMillis() - launchedAtMs
+                                    val previous = streamingAudioCtx
+                                    streamingAudioCtx = when {
+                                        staleness > STREAMING_TARGET_STALENESS_MS * 3 / 2 ->
+                                            (streamingAudioCtx - STREAMING_AUDIO_CTX_STEP)
+                                                .coerceAtLeast(STREAMING_AUDIO_CTX_MIN)
+                                        staleness < STREAMING_TARGET_STALENESS_MS / 2 ->
+                                            (streamingAudioCtx + STREAMING_AUDIO_CTX_STEP)
+                                                .coerceAtMost(STREAMING_AUDIO_CTX_MAX)
+                                        else -> streamingAudioCtx
+                                    }
+                                    if (streamingAudioCtx != previous) {
+                                        Log.i(
+                                            TAG,
+                                            "diarization streaming ctx adapt: $previous -> $streamingAudioCtx (staleness=${staleness}ms)"
+                                        )
+                                    }
+                                    if (!isActive || !isRecording.get() || text.isBlank()) {
+                                        return@streaming
+                                    }
+                                    Log.i(
+                                        TAG,
+                                        "diarization streaming emit staleness=${staleness}ms text=\"$text\""
+                                    )
+                                    val bundle = Bundle().apply {
+                                        putStringArrayList(
+                                            SpeechRecognizer.RESULTS_RECOGNITION,
+                                            arrayListOf(text),
+                                        )
+                                        putBoolean(RESULTS_STREAMING_PARTIAL, true)
+                                    }
+                                    try {
+                                        listener?.partialResults(bundle)
+                                    } catch (e: RemoteException) {
+                                        Log.w(TAG, "diarization streaming partial RemoteException", e)
+                                    }
+                                } finally {
+                                    streamingInFlight.set(false)
+                                }
+                            }
+                            streamingJobs.add(streamingJob)
+                        }
+                    }
+                }
+                if (stopListening) {
+                    isRecording.set(false)
+                    listener?.endOfSpeech()
+                    break
+                }
+            }
+        } finally {
+            try { audioRecord.stop() } catch (_: Throwable) {}
+            audioRecord.release()
+
+            // Close any open per-speaker segments — emits one last transcribe job per.
+            manager.flush()
+
+            // Wait for queued transcription jobs to complete so the final results bundle
+            // captures everything.
+            runBlocking {
+                transcribeJobs.toList().forEach {
+                    if (it.isActive) it.join()
+                }
+            }
+
+            // Assemble the final transcript: chronological list of "Speaker N: text" lines.
+            // Same int-id payload the in-stream partials carried — the UI does the
+            // display-name lookup on its side via SpeakerLabelStore.
+            val final = synchronized(committed) {
+                committed.joinToString(separator = "\n") { t ->
+                    "Speaker ${t.speakerId + 1}: ${t.text}"
+                }
+            }
+            val bundle = Bundle().apply {
+                putStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION,
+                    arrayListOf(final),
+                )
+            }
+            try {
+                listener?.results(bundle)
+            } catch (e: RemoteException) {
+                Log.w(TAG, "results RemoteException", e)
+            }
         }
     }
 }
