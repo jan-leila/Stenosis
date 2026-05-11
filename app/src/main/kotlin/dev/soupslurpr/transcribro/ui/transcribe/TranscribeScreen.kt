@@ -43,6 +43,8 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import dev.soupslurpr.transcribro.dataStore
+import dev.soupslurpr.transcribro.models.InstalledModelsRepository
+import dev.soupslurpr.transcribro.models.ModelCatalog
 import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
 import dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerLabelStore
@@ -78,6 +80,42 @@ fun TranscribeScreen() {
     val preferencesUiState by preferencesViewModel.uiState.collectAsState()
     val diarizationEnabled = preferencesUiState.diarizationEnabled.second.value
     val noiseSuppressionEnabled = preferencesUiState.noiseSuppressionEnabled.second.value
+    val whisperModelId = preferencesUiState.conversationWhisperModelId.second.value
+    val whisperStreamingModelId =
+        preferencesUiState.conversationWhisperStreamingModelId.second.value
+    val vadModelId = preferencesUiState.vadModelId.second.value
+    val segmenterModelId = preferencesUiState.conversationSegmenterModelId.second.value
+    val embedderModelId = preferencesUiState.conversationEmbedderModelId.second.value
+
+    val installedRepo = remember { InstalledModelsRepository(context) }
+    val installedState by installedRepo.state.collectAsState()
+
+    // Required-but-missing models for this session. Whisper + VAD are always required;
+    // segmenter + embedder are required only when diarization is enabled. A pref value
+    // of null means the user hasn't picked a model at all; a non-null id that isn't in
+    // installedState means the picked model was deleted (or was never installed yet).
+    val missingModels = buildList {
+        fun req(id: String?, label: String) {
+            if (id == null) add(label)
+            else if (!installedState.byId.containsKey(id)) {
+                val entry = ModelCatalog.findById(id)
+                add(entry?.displayName ?: label)
+            }
+        }
+        req(whisperModelId, "transcription model")
+        // Streaming model is optional. If the user picked one explicitly we require it,
+        // because the alternative would be silently downgrading the live preview to a
+        // different model than the user chose.
+        if (whisperStreamingModelId != null) {
+            req(whisperStreamingModelId, "streaming preview model")
+        }
+        req(vadModelId, "voice activity model")
+        if (diarizationEnabled) {
+            req(segmenterModelId, "speaker segmenter")
+            req(embedderModelId, "speaker embedder")
+        }
+    }
+    val canRecord = missingModels.isEmpty()
 
     // Per-screen label store. When we wire renaming later (e.g. LLM-driven speaker
     // naming after a session), this is the surface that pulls names from. For now it
@@ -187,6 +225,27 @@ fun TranscribeScreen() {
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        if (!canRecord) {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Missing models",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Spacer(Modifier.size(4.dp))
+                    Text(
+                        text = missingModels.joinToString(separator = ", "),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        text = "Install one in Settings → Models, then pick it under Settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            Spacer(Modifier.size(12.dp))
+        }
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Button(
                 onClick = {
@@ -207,11 +266,29 @@ fun TranscribeScreen() {
                                     MainRecognitionService.EXTRA_NOISE_SUPPRESSION,
                                     noiseSuppressionEnabled,
                                 )
+                                if (whisperModelId != null) {
+                                    putExtra(MainRecognitionService.EXTRA_WHISPER_MODEL_ID, whisperModelId)
+                                }
+                                if (whisperStreamingModelId != null) {
+                                    putExtra(
+                                        MainRecognitionService.EXTRA_WHISPER_STREAMING_MODEL_ID,
+                                        whisperStreamingModelId,
+                                    )
+                                }
+                                if (vadModelId != null) {
+                                    putExtra(MainRecognitionService.EXTRA_VAD_MODEL_ID, vadModelId)
+                                }
+                                if (segmenterModelId != null) {
+                                    putExtra(MainRecognitionService.EXTRA_SEGMENTER_MODEL_ID, segmenterModelId)
+                                }
+                                if (embedderModelId != null) {
+                                    putExtra(MainRecognitionService.EXTRA_EMBEDDER_MODEL_ID, embedderModelId)
+                                }
                             }
                         )
                     }
                 },
-                enabled = micPermission.status.isGranted && recognizer != null,
+                enabled = micPermission.status.isGranted && recognizer != null && canRecord,
             ) {
                 Text(if (isRecognizing) "Stop transcription" else "Start transcription")
             }

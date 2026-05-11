@@ -8,13 +8,20 @@ class WhisperLocalDataSource(
     private val whisperApi: WhisperApi,
     private val ioDispatcher: CoroutineDispatcher,
 ) {
-    suspend fun getWhisperContext(): WhisperContext {
-        return withContext(ioDispatcher) {
-            whisperApi.getWhisperContext()
-        }
-    }
+    suspend fun getStreamingContext(): WhisperContext =
+        withContext(ioDispatcher) { whisperApi.getStreamingContext() }
+
+    suspend fun getFinalContext(): WhisperContext =
+        withContext(ioDispatcher) { whisperApi.getFinalContext() }
 }
 
+/**
+ * Lets a caller load two distinct whisper contexts — one for the segment-final pass and
+ * one for the cheaper streaming-preview pass. If the caller wants the same model for
+ * both, [getStreamingContext] and [getFinalContext] just return contexts built from the
+ * same file (which is the current default).
+ */
 interface WhisperApi {
-    fun getWhisperContext(): WhisperContext
+    fun getStreamingContext(): WhisperContext
+    fun getFinalContext(): WhisperContext
 }

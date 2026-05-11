@@ -30,6 +30,18 @@
     <string name="keyboard_settings_category">Keyboard Transcription</string>
     <string name="conversation_settings_category">Conversation Transcription</string>
     <string name="shared_settings_category">Shared</string>
+    <string name="models_setting_name">Models</string>
+    <string name="models_setting_description">Install and remove transcription, VAD, and diarization models</string>
+    <string name="whisper_model_picker_name">Transcription model</string>
+    <string name="whisper_model_picker_description">Whisper variant used for the final pass</string>
+    <string name="whisper_streaming_model_picker_name">Streaming preview model</string>
+    <string name="whisper_streaming_model_picker_description">Optional smaller model just for the live preview. Leave as None to reuse the transcription model.</string>
+    <string name="vad_model_picker_name">Voice activity model</string>
+    <string name="vad_model_picker_description">Used by both modes to detect speech</string>
+    <string name="segmenter_model_picker_name">Speaker segmenter</string>
+    <string name="segmenter_model_picker_description">Detects per-frame speaker activity</string>
+    <string name="embedder_model_picker_name">Speaker embedder</string>
+    <string name="embedder_model_picker_description">Produces speaker identity vectors</string>
     <string name="auto_switch_to_previous_input_method_setting_description">Automatically switch to the previous
         input method when finished recognizing</string>
     <string name="auto_stop_recognition_setting_name">Auto-Stop Recognition</string>

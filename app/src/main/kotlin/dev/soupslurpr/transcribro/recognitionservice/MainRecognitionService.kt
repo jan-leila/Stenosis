@@ -18,6 +18,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whispercpp.rnnoise.Denoiser
 import com.whispercpp.whisper.WhisperContext
+import dev.soupslurpr.transcribro.models.InstalledModelsRepository
+import dev.soupslurpr.transcribro.models.ModelCatalog
+import dev.soupslurpr.transcribro.models.ModelEntry
+import dev.soupslurpr.transcribro.models.ModelNotInstalledException
 import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationManager
 import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationRepository
 import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteEmbedderApi
@@ -27,7 +31,6 @@ import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegment
 import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterLocalDataSource
 import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterOnnxModel
 import dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerRegistry
-import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationAssets
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadApi
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadDetector
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadLocalDataSource
@@ -60,6 +63,16 @@ class MainRecognitionService : RecognitionService() {
         // Apply RNNoise denoising to the mic input before it reaches whisper, silero,
         // and the diarization pipeline. Defaults to true if the caller doesn't set it.
         const val EXTRA_NOISE_SUPPRESSION = "dev.soupslurpr.transcribro.EXTRA_NOISE_SUPPRESSION"
+        // Catalog ids of the models this session should use. If absent, the service
+        // falls back to the first installed model of each kind, or refuses to start
+        // if nothing is installed.
+        const val EXTRA_WHISPER_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_WHISPER_MODEL_ID"
+        // Optional: when set, the live preview pass uses this id instead of the final
+        // model. Useful for picking a smaller/faster model just for the preview.
+        const val EXTRA_WHISPER_STREAMING_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_WHISPER_STREAMING_MODEL_ID"
+        const val EXTRA_VAD_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_VAD_MODEL_ID"
+        const val EXTRA_SEGMENTER_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_SEGMENTER_MODEL_ID"
+        const val EXTRA_EMBEDDER_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_EMBEDDER_MODEL_ID"
         // Speaker id (Int) attached to a partial bundle when diarization is on.
         // The display name lookup happens on the receiver via SpeakerLabelStore.
         const val RESULTS_SPEAKER_ID = "dev.soupslurpr.transcribro.RESULTS_SPEAKER_ID"
@@ -117,15 +130,65 @@ class MainRecognitionService : RecognitionService() {
 
     private val streamingJobs = mutableListOf<Job>()
 
+    // Active model ids, set per-session from EXTRA_* intents (or defaulted on the
+    // caller side from feature-specific preferences). Each factory below reads the
+    // matching field at load time so a session can install a fresh context just by
+    // releasing the repository and asking for it again.
+    //
+    // [activeWhisperStreamingModelId] is the model used for the live preview pass; when
+    // null, the streaming context is built from the same id as the final pass. Splitting
+    // them lets the user pick a smaller/faster model for the preview on slower devices.
+    private var activeWhisperFinalModelId: String? = null
+    private var activeWhisperStreamingModelId: String? = null
+    private var activeVadModelId: String? = null
+    private var activeSegmenterModelId: String? = null
+    private var activeEmbedderModelId: String? = null
+
+    // What was actually loaded into each cached context — used to detect "user switched
+    // models, reload required". `null` means nothing loaded yet.
+    private var loadedWhisperFinalModelId: String? = null
+    private var loadedWhisperStreamingModelId: String? = null
+    private var loadedVadModelId: String? = null
+    private var loadedSegmenterModelId: String? = null
+    private var loadedEmbedderModelId: String? = null
+
+    private val installedModels: InstalledModelsRepository by lazy {
+        InstalledModelsRepository(this)
+    }
+
+    private fun installedFile(entryId: String?): java.io.File {
+        val id = entryId ?: throw ModelNotInstalledException(
+            // Synthesize a placeholder entry for the error message. The UI catches this
+            // and treats "no id selected" the same as "id selected but not installed".
+            ModelEntry(
+                id = "(unset)",
+                kind = dev.soupslurpr.transcribro.models.ModelKind.WhisperTranscriber,
+                displayName = "(none selected)",
+                description = null,
+                url = "",
+                sha256 = "",
+                sizeBytes = 0,
+            )
+        )
+        val entry = ModelCatalog.findById(id)
+            ?: error("Unknown catalog id: $id")
+        return installedModels.fileFor(entry) ?: throw ModelNotInstalledException(entry)
+    }
+
     private val whisperRepository: WhisperRepository =
         WhisperRepository(
             WhisperLocalDataSource(
-                whisperApi =
-                object : WhisperApi {
-                    override fun getWhisperContext(): WhisperContext {
-                        return WhisperContext.createContextFromAsset(
-                            application.assets,
-                            "models/whisper/ggml-model-whisper-tiny.en-q8_0.bin"
+                whisperApi = object : WhisperApi {
+                    override fun getStreamingContext(): WhisperContext {
+                        // Fall back to the final-pass model if the user didn't pick a
+                        // separate streaming model. This is the common case.
+                        val id = activeWhisperStreamingModelId ?: activeWhisperFinalModelId
+                        return WhisperContext.createContextFromFile(installedFile(id).absolutePath)
+                    }
+
+                    override fun getFinalContext(): WhisperContext {
+                        return WhisperContext.createContextFromFile(
+                            installedFile(activeWhisperFinalModelId).absolutePath
                         )
                     }
                 },
@@ -143,12 +206,7 @@ class MainRecognitionService : RecognitionService() {
                     val MIN_SILENCE_DURATION_MS = 3000
                     val SPEECH_PAD_MS = 0
 
-                    val model =
-                        this@MainRecognitionService.assets.open("models/silero_vad/silero_vad.onnx")
-
-                    val modelBytes = model.readBytes()
-
-                    model.close()
+                    val modelBytes = installedFile(activeVadModelId).readBytes()
 
                     return SileroVadDetector(
                         modelBytes,
@@ -164,15 +222,11 @@ class MainRecognitionService : RecognitionService() {
         )
     )
 
-    // Diarization is opt-in (via the diarizationEnabled preference / EXTRA_DIARIZATION
-    // intent extra) — its models are loaded on first use only, not at service onCreate.
     private val diarizationRepository = DiarizationRepository(
         segmenterDataSource = PyannoteSegmenterLocalDataSource(
             api = object : PyannoteSegmenterApi {
                 override fun getSegmenter(): PyannoteSegmenterOnnxModel {
-                    val bytes = this@MainRecognitionService.assets
-                        .open(DiarizationAssets.SEGMENTATION_ASSET)
-                        .use { it.readBytes() }
+                    val bytes = installedFile(activeSegmenterModelId).readBytes()
                     return PyannoteSegmenterOnnxModel(bytes)
                 }
             },
@@ -181,15 +235,62 @@ class MainRecognitionService : RecognitionService() {
         embedderDataSource = PyannoteEmbedderLocalDataSource(
             api = object : PyannoteEmbedderApi {
                 override fun getEmbedder(): PyannoteEmbedderOnnxModel {
-                    val bytes = this@MainRecognitionService.assets
-                        .open(DiarizationAssets.EMBEDDER_ASSET)
-                        .use { it.readBytes() }
+                    val bytes = installedFile(activeEmbedderModelId).readBytes()
                     return PyannoteEmbedderOnnxModel(bytes)
                 }
             },
             ioDispatcher = Dispatchers.IO,
         ),
     )
+
+    /**
+     * Make sure the cached whisper / VAD contexts match the requested ids. If anything
+     * changed since the last session — including a switch from "use same model for
+     * streaming" to "use different model" — release and reload both whisper contexts.
+     * Throws [ModelNotInstalledException] if any required id resolves to a missing file.
+     *
+     * [requestedWhisperStreaming] of `null` means "use the final model for streaming
+     * too"; the streaming context is loaded from the same file in that case.
+     */
+    private suspend fun ensureCoreModelsLoaded(
+        requestedWhisperFinal: String?,
+        requestedWhisperStreaming: String?,
+        requestedVad: String?,
+    ) {
+        val whisperChanged = requestedWhisperFinal != loadedWhisperFinalModelId ||
+            requestedWhisperStreaming != loadedWhisperStreamingModelId
+        if (whisperChanged) {
+            whisperRepository.release()
+            loadedWhisperFinalModelId = null
+            loadedWhisperStreamingModelId = null
+            activeWhisperFinalModelId = requestedWhisperFinal
+            activeWhisperStreamingModelId = requestedWhisperStreaming
+            whisperRepository.preload()
+            loadedWhisperFinalModelId = requestedWhisperFinal
+            loadedWhisperStreamingModelId = requestedWhisperStreaming
+        }
+        if (requestedVad != loadedVadModelId) {
+            sileroVadRepository.release()
+            loadedVadModelId = null
+            activeVadModelId = requestedVad
+            sileroVadRepository.preload()
+            loadedVadModelId = requestedVad
+        }
+    }
+
+    /** Same idea, but for the diarization pair. Called only when diarization is enabled. */
+    private suspend fun ensureDiarizationLoaded(requestedSeg: String?, requestedEmb: String?) {
+        if (requestedSeg != loadedSegmenterModelId || requestedEmb != loadedEmbedderModelId) {
+            diarizationRepository.release()
+            loadedSegmenterModelId = null
+            loadedEmbedderModelId = null
+            activeSegmenterModelId = requestedSeg
+            activeEmbedderModelId = requestedEmb
+            diarizationRepository.preload()
+            loadedSegmenterModelId = requestedSeg
+            loadedEmbedderModelId = requestedEmb
+        }
+    }
 
     // Persistent speaker registry across recognition sessions. Reset on service teardown
     // (or, in future, on an explicit user gesture). DiarizationManager.reset() also
@@ -206,34 +307,11 @@ class MainRecognitionService : RecognitionService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Pre-load whisper, silero, and the diarization models so first-use latency and
-        // any schema-mismatch failures surface here rather than crashing the audio loop
-        // later. Diarization adds ~30MB of RAM, but doing it here means the user gets
-        // immediate startup with a toast on failure (no explicit "verify" button needed).
-        recordAndTranscribeScope.launch {
-            try {
-                whisperRepository.preload()
-                Log.i(TAG, "whisper context preloaded")
-                sileroVadRepository.preload()
-                Log.i(TAG, "silero VAD detector preloaded")
-                diarizationRepository.preload()
-                Log.i(TAG, "diarization models preloaded")
-            } catch (e: ModelSchemaMismatchException) {
-                Log.e(TAG, "model schema mismatch during preload", e)
-                modelLoadError = "${e.modelName}: ${e.details}"
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        this@MainRecognitionService,
-                        "Stenosis: ${e.modelName} model is incompatible. " +
-                            "Recognition disabled until the wrapper is updated.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-            } catch (e: Throwable) {
-                Log.e(TAG, "unexpected preload failure", e)
-                modelLoadError = "${e::class.simpleName}: ${e.message}"
-            }
-        }
+        // Models are now loaded lazily per session in [onStartListening] based on the
+        // EXTRA_*_MODEL_ID extras supplied by the caller. We don't know at service
+        // create time which model the next session will request, so eager preload
+        // would either guess (and waste RAM) or hardcode (which is what we just left
+        // behind). First-use latency on a session is now the model load.
     }
 
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
@@ -251,6 +329,13 @@ class MainRecognitionService : RecognitionService() {
         val diarizationEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_DIARIZATION) ?: false
         val noiseSuppressionEnabled =
             recognizerIntent?.extras?.getBoolean(EXTRA_NOISE_SUPPRESSION) ?: true
+        val requestedWhisperId = recognizerIntent?.extras?.getString(EXTRA_WHISPER_MODEL_ID)
+        val requestedWhisperStreamingId =
+            recognizerIntent?.extras?.getString(EXTRA_WHISPER_STREAMING_MODEL_ID)
+        val requestedVadId =
+            recognizerIntent?.extras?.getString(EXTRA_VAD_MODEL_ID) ?: "silero-vad-v5"
+        val requestedSegmenterId = recognizerIntent?.extras?.getString(EXTRA_SEGMENTER_MODEL_ID)
+        val requestedEmbedderId = recognizerIntent?.extras?.getString(EXTRA_EMBEDDER_MODEL_ID)
         val speechStartPadMs = 24000
 
         Log.i(
@@ -417,11 +502,45 @@ class MainRecognitionService : RecognitionService() {
                 isPartialResults = isPartialResults == true,
                 listener = listener,
                 denoiser = denoiser,
+                requestedWhisperId = requestedWhisperId,
+                requestedWhisperStreamingId = requestedWhisperStreamingId,
+                requestedVadId = requestedVadId,
+                requestedSegmenterId = requestedSegmenterId,
+                requestedEmbedderId = requestedEmbedderId,
             )
             return
         }
 
         recordAndTranscribeJob = recordAndTranscribeScope.launch recordAndTranscribe@{
+            try {
+                ensureCoreModelsLoaded(
+                    requestedWhisperFinal = requestedWhisperId,
+                    requestedWhisperStreaming = requestedWhisperStreamingId,
+                    requestedVad = requestedVadId,
+                )
+            } catch (e: ModelNotInstalledException) {
+                Log.w(TAG, "recognition refused: ${e.entry.id} not installed")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@MainRecognitionService,
+                        "Stenosis: ${e.entry.displayName} is not installed. " +
+                            "Open Settings → Models to install it.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                audioRecord.release()
+                denoiser?.close()
+                listener?.error(SpeechRecognizer.ERROR_CLIENT)
+                return@recordAndTranscribe
+            } catch (e: ModelSchemaMismatchException) {
+                Log.e(TAG, "model schema mismatch at session start", e)
+                modelLoadError = "${e.modelName}: ${e.details}"
+                audioRecord.release()
+                denoiser?.close()
+                listener?.error(SpeechRecognizer.ERROR_CLIENT)
+                return@recordAndTranscribe
+            }
+
             audioRecord.startRecording()
             isRecording.set(true)
             isSpeaking = false
@@ -864,7 +983,44 @@ class MainRecognitionService : RecognitionService() {
         isPartialResults: Boolean,
         listener: Callback?,
         denoiser: Denoiser?,
+        requestedWhisperId: String?,
+        requestedWhisperStreamingId: String?,
+        requestedVadId: String?,
+        requestedSegmenterId: String?,
+        requestedEmbedderId: String?,
     ): Job = recordAndTranscribeScope.launch diarize@{
+        // Load (or switch) whisper + VAD before the audio loop starts. Diarization
+        // models are loaded inside the existing try below.
+        try {
+            ensureCoreModelsLoaded(
+                requestedWhisperFinal = requestedWhisperId,
+                requestedWhisperStreaming = requestedWhisperStreamingId,
+                requestedVad = requestedVadId,
+            )
+            ensureDiarizationLoaded(requestedSegmenterId, requestedEmbedderId)
+        } catch (e: ModelNotInstalledException) {
+            Log.w(TAG, "diarization session refused: ${e.entry.id} not installed")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    this@MainRecognitionService,
+                    "Stenosis: ${e.entry.displayName} is not installed. " +
+                        "Open Settings → Models to install it.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            audioRecord.release()
+            denoiser?.close()
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return@diarize
+        } catch (e: ModelSchemaMismatchException) {
+            Log.e(TAG, "model schema mismatch at diarization session start", e)
+            modelLoadError = "${e.modelName}: ${e.details}"
+            audioRecord.release()
+            denoiser?.close()
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return@diarize
+        }
+
         isRecording.set(true)
         stopListening = false
         transcribeJobs.clear()
@@ -878,6 +1034,19 @@ class MainRecognitionService : RecognitionService() {
             segmenter = diarizationRepository.getSegmenter()
             embedder = diarizationRepository.getEmbedder()
             Log.i(TAG, "diarization models ready")
+        } catch (e: ModelNotInstalledException) {
+            Log.w(TAG, "diarization requested but ${e.entry.id} not installed")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    this@MainRecognitionService,
+                    "Stenosis: diarization model not installed (${e.entry.displayName}). " +
+                        "Install it in Settings → Models.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            audioRecord.release()
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return@diarize
         } catch (e: ModelSchemaMismatchException) {
             Log.e(TAG, "diarization model schema mismatch", e)
             modelLoadError = "${e.modelName}: ${e.details}"

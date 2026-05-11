@@ -3,6 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Models are downloaded from HuggingFace / GitHub at runtime via ModelInstaller. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- ACCESS_NETWORK_STATE lets us read connectivity type later (e.g. warn before a
+         large download over cellular). Not strictly required to make HTTP work, but it's
+         a normal permission so no runtime prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <queries>
         <intent>

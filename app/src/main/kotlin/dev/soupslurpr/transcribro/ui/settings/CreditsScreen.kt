@@ -10,13 +10,19 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme.typography
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import dev.soupslurpr.transcribro.models.InstalledModelsRepository
+import dev.soupslurpr.transcribro.models.ModelCatalog
+import dev.soupslurpr.transcribro.models.ModelKind
 
 /**
  * BSD 3-Clause license body keyed on the per-dependency copyright block. Like MIT, the
@@ -290,10 +296,28 @@ const val APACHE2LICENSE = "\n" +
 fun CreditsScreen(
     onRustLibraryCreditsButtonClicked: () -> Unit,
 ) {
+    // Credit lines for runtime-downloaded models only show when the model is actually
+    // installed. The bundled native runtimes (whisper.cpp, RNNoise) are always credited
+    // since the library itself ships in the APK regardless of which models the user has.
+    val context = LocalContext.current
+    val installedRepo = remember { InstalledModelsRepository(context) }
+    val installed by installedRepo.state.collectAsState()
+    val installedIds = installed.byId.keys
+    val anyInstalled = { kind: ModelKind ->
+        ModelCatalog.forKind(kind).any { it.id in installedIds }
+    }
+    val anyWhisperInstalled = anyInstalled(ModelKind.WhisperTranscriber)
+    val anyVadInstalled = anyInstalled(ModelKind.VoiceActivityDetector)
+    val anySegmenterInstalled = anyInstalled(ModelKind.SpeakerSegmenter)
+    val anyEmbedderInstalled = anyInstalled(ModelKind.SpeakerEmbedder)
+    // sherpa-onnx is the toolchain that produced the segmenter/embedder ONNX exports
+    // we use, so credit it iff at least one of those is installed.
+    val anySherpaExport = anySegmenterInstalled || anyEmbedderInstalled
+
     LazyColumn(
         modifier = Modifier
     ) {
-        item {
+        if (anyWhisperInstalled) item {
             CreditsItem(
                 dependencyName = "OpenAI Whisper models",
                 dependencyPackageName = "https://huggingface.co/openai",
@@ -307,28 +331,28 @@ fun CreditsScreen(
                 dependencyLicense = mitLicense("Copyright (c) 2023-2024 The ggml authors"),
             )
         }
-        item {
+        if (anyVadInstalled) item {
             CreditsItem(
                 dependencyName = "Silero VAD",
                 dependencyPackageName = "https://github.com/snakers4/silero-vad",
                 dependencyLicense = mitLicense("Copyright (c) 2020-present Silero Team"),
             )
         }
-        item {
+        if (anySegmenterInstalled) item {
             CreditsItem(
                 dependencyName = "pyannote-audio (segmentation-3.0)",
                 dependencyPackageName = "https://huggingface.co/pyannote/segmentation-3.0",
                 dependencyLicense = mitLicense("Copyright (c) 2020- CNRS"),
             )
         }
-        item {
+        if (anyEmbedderInstalled) item {
             CreditsItem(
                 dependencyName = "WeSpeaker (voxceleb resnet34 LM)",
                 dependencyPackageName = "https://github.com/wenet-e2e/wespeaker",
                 dependencyLicense = APACHE2LICENSE,
             )
         }
-        item {
+        if (anySherpaExport) item {
             CreditsItem(
                 dependencyName = "sherpa-onnx (model exports for pyannote and WeSpeaker)",
                 dependencyPackageName = "https://github.com/k2-fsa/sherpa-onnx",

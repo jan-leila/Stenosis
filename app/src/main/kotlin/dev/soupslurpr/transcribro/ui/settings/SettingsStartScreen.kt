@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -26,11 +27,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.soupslurpr.transcribro.R
 import dev.soupslurpr.transcribro.dataStore
+import dev.soupslurpr.transcribro.models.ModelKind
 import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.ui.reusablecomposables.ScreenLazyColumn
 
 @Composable
 fun SettingsStartScreen(
+    onClickModels: () -> Unit,
     onClickLicense: () -> Unit,
     onClickPrivacyPolicy: () -> Unit,
     onClickCredits: () -> Unit,
@@ -47,6 +50,14 @@ fun SettingsStartScreen(
         modifier = Modifier
             .fillMaxSize()
     ) {
+        item {
+            SettingsIconItem(
+                name = stringResource(id = R.string.models_setting_name),
+                description = stringResource(id = R.string.models_setting_description),
+                icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                onClick = onClickModels,
+            )
+        }
         item {
             SettingsCategory(
                 stringResource(R.string.theme)
@@ -91,10 +102,41 @@ fun SettingsStartScreen(
                 }
             )
         }
+        item {
+            val preference = preferencesUiState.vadModelId
+            ModelPicker(
+                kind = ModelKind.VoiceActivityDetector,
+                name = stringResource(id = R.string.vad_model_picker_name),
+                description = stringResource(id = R.string.vad_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
+                allowNone = false,
+            )
+        }
 
         item {
             SettingsCategory(
                 stringResource(R.string.conversation_settings_category)
+            )
+        }
+        item {
+            val preference = preferencesUiState.conversationWhisperModelId
+            ModelPicker(
+                kind = ModelKind.WhisperTranscriber,
+                name = stringResource(id = R.string.whisper_model_picker_name),
+                description = stringResource(id = R.string.whisper_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
+            )
+        }
+        item {
+            val preference = preferencesUiState.conversationWhisperStreamingModelId
+            ModelPicker(
+                kind = ModelKind.WhisperTranscriber,
+                name = stringResource(id = R.string.whisper_streaming_model_picker_name),
+                description = stringResource(id = R.string.whisper_streaming_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
             )
         }
         item {
@@ -108,10 +150,50 @@ fun SettingsStartScreen(
                 }
             )
         }
+        item {
+            val preference = preferencesUiState.conversationSegmenterModelId
+            ModelPicker(
+                kind = ModelKind.SpeakerSegmenter,
+                name = stringResource(id = R.string.segmenter_model_picker_name),
+                description = stringResource(id = R.string.segmenter_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
+            )
+        }
+        item {
+            val preference = preferencesUiState.conversationEmbedderModelId
+            ModelPicker(
+                kind = ModelKind.SpeakerEmbedder,
+                name = stringResource(id = R.string.embedder_model_picker_name),
+                description = stringResource(id = R.string.embedder_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
+            )
+        }
 
         item {
             SettingsCategory(
                 stringResource(R.string.keyboard_settings_category)
+            )
+        }
+        item {
+            val preference = preferencesUiState.keyboardWhisperModelId
+            ModelPicker(
+                kind = ModelKind.WhisperTranscriber,
+                name = stringResource(id = R.string.whisper_model_picker_name),
+                description = stringResource(id = R.string.whisper_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
+            )
+        }
+        item {
+            val preference = preferencesUiState.keyboardWhisperStreamingModelId
+            ModelPicker(
+                kind = ModelKind.WhisperTranscriber,
+                name = stringResource(id = R.string.whisper_streaming_model_picker_name),
+                description = stringResource(id = R.string.whisper_streaming_model_picker_description),
+                selectedId = preference.second.value,
+                onSelect = { preferencesViewModel.setPreference(preference.first, it) },
             )
         }
         item {

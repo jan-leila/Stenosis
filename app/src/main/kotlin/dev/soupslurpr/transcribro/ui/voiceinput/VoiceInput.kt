@@ -162,6 +162,11 @@ class VoiceInput : InputMethodService() {
             // regardless of the shared preference.
             val diarizationEnabled = false
 
+            val keyboardWhisperModelId by preferencesUiState.keyboardWhisperModelId.second
+            val keyboardWhisperStreamingModelId by
+                preferencesUiState.keyboardWhisperStreamingModelId.second
+            val vadModelId by preferencesUiState.vadModelId.second
+
             val snackbarHostState = remember { SnackbarHostState() }
 
             val snackbarCoroutine = rememberCoroutineScope()
@@ -488,6 +493,9 @@ class VoiceInput : InputMethodService() {
                                                         streamingTranscription,
                                                         diarizationEnabled,
                                                         noiseSuppression,
+                                                        keyboardWhisperModelId,
+                                                        keyboardWhisperStreamingModelId,
+                                                        vadModelId,
                                                     )
                                                 )
                                             }
@@ -596,6 +604,9 @@ class VoiceInput : InputMethodService() {
                                                                 streamingTranscription,
                                                                 diarizationEnabled,
                                                                 noiseSuppression,
+                                                                keyboardWhisperModelId,
+                                                                keyboardWhisperStreamingModelId,
+                                                                vadModelId,
                                                             )
                                                         )
                                                     }
@@ -1002,6 +1013,9 @@ class VoiceInput : InputMethodService() {
         streaming: Boolean,
         diarization: Boolean,
         noiseSuppression: Boolean,
+        whisperModelId: String?,
+        whisperStreamingModelId: String?,
+        vadModelId: String?,
     ): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -1009,6 +1023,18 @@ class VoiceInput : InputMethodService() {
             putExtra(MainRecognitionService.EXTRA_STREAMING, streaming)
             putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarization)
             putExtra(MainRecognitionService.EXTRA_NOISE_SUPPRESSION, noiseSuppression)
+            if (whisperModelId != null) {
+                putExtra(MainRecognitionService.EXTRA_WHISPER_MODEL_ID, whisperModelId)
+            }
+            if (whisperStreamingModelId != null) {
+                putExtra(
+                    MainRecognitionService.EXTRA_WHISPER_STREAMING_MODEL_ID,
+                    whisperStreamingModelId,
+                )
+            }
+            if (vadModelId != null) {
+                putExtra(MainRecognitionService.EXTRA_VAD_MODEL_ID, vadModelId)
+            }
         }
     }
 }

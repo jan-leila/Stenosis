@@ -4,6 +4,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 
 /** Preference pairs, the first is the preference key, and the second is the default value. */
 data class PreferencesUiState(
@@ -70,5 +71,59 @@ data class PreferencesUiState(
     val noiseSuppressionEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("NOISE_SUPPRESSION_ENABLED")),
         mutableStateOf(true)
-    )
+    ),
+
+    // --- Per-feature model selections ---------------------------------------------
+    // Each holds a [ModelCatalog] entry id. Value of `null` means "no model picked
+    // yet"; record paths refuse to start until the user installs and selects one.
+    // VAD defaults to the single available silero entry so a freshly-installed-only
+    // VAD doesn't require an extra picker step.
+
+    /** Active whisper model used by the keyboard IME (final pass). */
+    val keyboardWhisperModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("KEYBOARD_WHISPER_MODEL_ID"),
+        mutableStateOf(null),
+    ),
+
+    /**
+     * Optional separate whisper model for the keyboard's live preview pass. `null`
+     * means "use the same model as the final pass" — the common case.
+     */
+    val keyboardWhisperStreamingModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("KEYBOARD_WHISPER_STREAMING_MODEL_ID"),
+        mutableStateOf(null),
+    ),
+
+    /** Active whisper model used by in-app conversation transcription (final pass). */
+    val conversationWhisperModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("CONVERSATION_WHISPER_MODEL_ID"),
+        mutableStateOf(null),
+    ),
+
+    /**
+     * Optional separate whisper model for the conversation screen's live preview pass.
+     * `null` means "use the same model as the final pass".
+     */
+    val conversationWhisperStreamingModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("CONVERSATION_WHISPER_STREAMING_MODEL_ID"),
+        mutableStateOf(null),
+    ),
+
+    /** Active pyannote-style speaker segmenter (conversation diarization only). */
+    val conversationSegmenterModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("CONVERSATION_SEGMENTER_MODEL_ID"),
+        mutableStateOf(null),
+    ),
+
+    /** Active speaker embedder (conversation diarization only). */
+    val conversationEmbedderModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("CONVERSATION_EMBEDDER_MODEL_ID"),
+        mutableStateOf(null),
+    ),
+
+    /** Active VAD model. Shared by both modes; only one VAD entry exists for now. */
+    val vadModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("VAD_MODEL_ID"),
+        mutableStateOf("silero-vad-v5"),
+    ),
 )

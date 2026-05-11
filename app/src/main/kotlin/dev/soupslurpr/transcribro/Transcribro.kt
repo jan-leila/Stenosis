@@ -58,6 +58,7 @@ import dev.soupslurpr.transcribro.ui.action_recognize_speech.ActionRecognizeSpee
 import dev.soupslurpr.transcribro.ui.keyboard.KeyboardScreen
 import dev.soupslurpr.transcribro.ui.settings.CreditsScreen
 import dev.soupslurpr.transcribro.ui.settings.LicenseScreen
+import dev.soupslurpr.transcribro.ui.settings.ModelsScreen
 import dev.soupslurpr.transcribro.ui.settings.PrivacyPolicyScreen
 import dev.soupslurpr.transcribro.ui.settings.SettingsStartScreen
 import dev.soupslurpr.transcribro.ui.transcribe.TranscribeScreen
@@ -72,6 +73,7 @@ enum class TranscribroAppScreens(@StringRes val title: Int) {
     KeyboardStart(title = R.string.keyboard),
     Settings(title = R.string.settings),
     SettingsStart(title = R.string.settings),
+    SettingsModels(title = R.string.models_setting_name),
     SettingsLicense(title = R.string.license),
     SettingsPrivacyPolicy(title = R.string.privacy_policy),
     SettingsCredits(title = R.string.credits),
@@ -259,6 +261,9 @@ fun TranscribroApp(
                     route = TranscribroAppScreens.SettingsStart
                 ) {
                     SettingsStartScreen(
+                        onClickModels = {
+                            navController.navigate(TranscribroAppScreens.SettingsModels.name)
+                        },
                         onClickLicense = {
                             navController.navigate(TranscribroAppScreens.SettingsLicense.name)
                         },
@@ -269,6 +274,11 @@ fun TranscribroApp(
                             navController.navigate(TranscribroAppScreens.SettingsCredits.name)
                         }
                     )
+                }
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.SettingsModels
+                ) {
+                    ModelsScreen()
                 }
                 composableWithDefaultSlideTransitions(
                     route = TranscribroAppScreens.SettingsLicense

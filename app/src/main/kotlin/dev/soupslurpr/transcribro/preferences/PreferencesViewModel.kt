@@ -105,7 +105,56 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .noiseSuppressionEnabled.second.value
                         )
-                    )
+                    ),
+                    keyboardWhisperModelId = Pair(
+                        uiState.value.keyboardWhisperModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.keyboardWhisperModelId.first]
+                                ?: uiState.value.keyboardWhisperModelId.second.value
+                        )
+                    ),
+                    keyboardWhisperStreamingModelId = Pair(
+                        uiState.value.keyboardWhisperStreamingModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.keyboardWhisperStreamingModelId.first]
+                                ?: uiState.value.keyboardWhisperStreamingModelId.second.value
+                        )
+                    ),
+                    conversationWhisperModelId = Pair(
+                        uiState.value.conversationWhisperModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.conversationWhisperModelId.first]
+                                ?: uiState.value.conversationWhisperModelId.second.value
+                        )
+                    ),
+                    conversationWhisperStreamingModelId = Pair(
+                        uiState.value.conversationWhisperStreamingModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.conversationWhisperStreamingModelId.first]
+                                ?: uiState.value.conversationWhisperStreamingModelId.second.value
+                        )
+                    ),
+                    conversationSegmenterModelId = Pair(
+                        uiState.value.conversationSegmenterModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.conversationSegmenterModelId.first]
+                                ?: uiState.value.conversationSegmenterModelId.second.value
+                        )
+                    ),
+                    conversationEmbedderModelId = Pair(
+                        uiState.value.conversationEmbedderModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.conversationEmbedderModelId.first]
+                                ?: uiState.value.conversationEmbedderModelId.second.value
+                        )
+                    ),
+                    vadModelId = Pair(
+                        uiState.value.vadModelId.first,
+                        mutableStateOf(
+                            preferences[uiState.value.vadModelId.first]
+                                ?: uiState.value.vadModelId.second.value
+                        )
+                    ),
                 )
             }
         }.collect()
@@ -118,6 +167,19 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
         viewModelScope.launch {
             dataStore.edit { preferences ->
                 preferences[key] = value
+            }
+        }
+    }
+
+    /**
+     * Set a string preference. Passing `null` removes the key, which the populate
+     * path interprets as "fall back to the in-memory default".
+     */
+    @JvmName("setStringPreference")
+    fun setPreference(key: Preferences.Key<String>, value: String?) {
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                if (value == null) preferences.remove(key) else preferences[key] = value
             }
         }
     }

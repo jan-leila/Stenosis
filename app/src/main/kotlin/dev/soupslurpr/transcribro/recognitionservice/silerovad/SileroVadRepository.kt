@@ -36,6 +36,7 @@ class SileroVadRepository(
 
     fun release() {
         sileroVadDetector.value?.close()
+        sileroVadDetector.value = null
     }
 
     fun reset() {

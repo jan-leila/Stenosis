@@ -19,10 +19,10 @@ class WhisperRepository(
     private var finalContext: WhisperContext? = null
 
     private suspend fun ensureStreamingContext(): WhisperContext =
-        streamingContext ?: whisperLocalDataSource.getWhisperContext().also { streamingContext = it }
+        streamingContext ?: whisperLocalDataSource.getStreamingContext().also { streamingContext = it }
 
     private suspend fun ensureFinalContext(): WhisperContext =
-        finalContext ?: whisperLocalDataSource.getWhisperContext().also { finalContext = it }
+        finalContext ?: whisperLocalDataSource.getFinalContext().also { finalContext = it }
 
     /** Eagerly load both models so the first transcription doesn't pay model-load latency. */
     suspend fun preload() {
