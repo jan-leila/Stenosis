@@ -1,4 +1,4 @@
-package dev.soupslurpr.transcribro.ui.start
+package dev.soupslurpr.transcribro.ui.keyboard
 
 import android.Manifest
 import android.content.Context
@@ -48,7 +48,7 @@ import kotlin.random.Random
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun StartScreen() {
+fun KeyboardScreen() {
     val context = LocalContext.current
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -79,7 +79,7 @@ fun StartScreen() {
 
     val isAprilFools = ((LocalDateTime.now().monthValue == 4) && (LocalDateTime.now().dayOfMonth == 1))
 
-    val randomValue = Random.nextInt(0, 24)
+    val randomValue = Random.nextInt(0, 23)
     val splashMessage = rememberSaveable {
         when (randomValue) {
             0 -> "Where every word counts, unless it's a typo."
@@ -96,16 +96,15 @@ fun StartScreen() {
             11 -> "Bridging the gap between brainwaves and text, one word at a time."
             12 -> "You do the talking; I handle the typing. Teamwork makes the dream work."
             13 -> "Where your voice gets VIP treatment, no velvet rope required."
-            14 -> "Transcribruh, Transcribruv, Transcribrah"
-            15 -> "Unofficially competing for the title of \"World’s Most Patient Listener\" since launch."
-            16 -> "Because typing is soooo 20th century."
-            17 -> "Quietly accurate, loudly private."
-            18 -> "Speech-to-text without the cloud circus."
-            19 -> "When speed matters and privacy matters more."
-            20 -> "Freeing you from thumb cramps since 2024."
-            21 -> "Save the thumbs, use thy tongue."
-            22 -> "Doesn't work well with brainrot. Yet."
-            23 -> "Making sure \"once upon a time\" never becomes \"one upon a tim\"."
+            14 -> "Unofficially competing for the title of \"World's Most Patient Listener\" since launch."
+            15 -> "Because typing is soooo 20th century."
+            16 -> "Quietly accurate, loudly private."
+            17 -> "Speech-to-text without the cloud circus."
+            18 -> "When speed matters and privacy matters more."
+            19 -> "Freeing you from thumb cramps since 2024."
+            20 -> "Save the thumbs, use thy tongue."
+            21 -> "Doesn't work well with brainrot. Yet."
+            22 -> "Making sure \"once upon a time\" never becomes \"one upon a tim\"."
             else -> "Hey! Stop reading my source code without my consent! Just kidding, I'm open source :)"
         }
     }
@@ -156,7 +155,7 @@ fun StartScreen() {
                     Column(
                         Modifier.padding(16.dp)
                     ) {
-                        Text("If you want to use the Transcribro Voice Input keyboard, please turn it on in system settings.")
+                        Text("If you want to use the Stenosis Voice Input keyboard, please turn it on in system settings.")
                         Spacer(Modifier.padding(8.dp))
                         FilledTonalButton(
                             onClick = {
@@ -177,11 +176,11 @@ fun StartScreen() {
                     Modifier.padding(16.dp)
                 ) {
                     Text(
-                        "If you want other apps that use the user-selected voice input app to use Transcribro," +
-                                " you need to grant Transcribro Microphone access " +
+                        "If you want other apps that use the user-selected voice input app to use Stenosis," +
+                                " you need to grant Stenosis Microphone access " +
                                 "(make sure to select \"While using the app\" or it won't work properly), and then select " +
-                                "Transcribro Speech Recognition Service as the voice input app in settings." +
-                                " Go to System > Languages > Voice input, and then make sure Transcribro Speech Recognition Service is selected as the voice input app.",
+                                "Stenosis Speech Recognition Service as the voice input app in settings." +
+                                " Go to System > Languages > Voice input, and then make sure Stenosis Speech Recognition Service is selected as the voice input app.",
                     )
                     Spacer(Modifier.padding(8.dp))
                     FilledTonalButton(
@@ -204,7 +203,7 @@ fun StartScreen() {
                         Text("Open settings (Navigate to System > Language & region > Speech > Voice input)")
                     }
                     Spacer(Modifier.padding(8.dp))
-                    Text("If you already selected Transcribro as the voice input app, please ignore this.")
+                    Text("If you already selected Stenosis as the voice input app, please ignore this.")
                 }
             }
         }

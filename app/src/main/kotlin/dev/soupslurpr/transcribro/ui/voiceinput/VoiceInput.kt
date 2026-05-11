@@ -157,7 +157,10 @@ class VoiceInput : InputMethodService() {
 
             val noiseSuppression by preferencesUiState.noiseSuppressionEnabled.second
 
-            val diarizationEnabled by preferencesUiState.diarizationEnabled.second
+            // Diarization is a conversation-mode-only feature. The keyboard always
+            // transcribes a single speaker (the user) so we never enable it here,
+            // regardless of the shared preference.
+            val diarizationEnabled = false
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -218,7 +221,7 @@ class VoiceInput : InputMethodService() {
                                                 startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName))
                                             }
                                         ) {
-                                            Text("Open Transcribro")
+                                            Text("Open Stenosis")
                                         }
                                     }
                                 }
@@ -539,7 +542,7 @@ class VoiceInput : InputMethodService() {
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Filled.Settings,
-                                                            contentDescription = "open Transcribro's settings"
+                                                            contentDescription = "open Stenosis's settings"
                                                         )
                                                     }
                                                     Spacer(modifier = Modifier.size(8.dp))

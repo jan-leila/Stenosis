@@ -16,14 +16,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.VolunteerActivism
-import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.VolunteerActivism
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,36 +55,32 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
 import dev.soupslurpr.transcribro.ui.action_recognize_speech.ActionRecognizeSpeechScreen
-import dev.soupslurpr.transcribro.ui.donate.DonateStartScreen
-import dev.soupslurpr.transcribro.ui.transcribe.TranscribeScreen
+import dev.soupslurpr.transcribro.ui.keyboard.KeyboardScreen
 import dev.soupslurpr.transcribro.ui.settings.CreditsScreen
 import dev.soupslurpr.transcribro.ui.settings.LicenseScreen
 import dev.soupslurpr.transcribro.ui.settings.PrivacyPolicyScreen
 import dev.soupslurpr.transcribro.ui.settings.SettingsStartScreen
-import dev.soupslurpr.transcribro.ui.start.StartScreen
+import dev.soupslurpr.transcribro.ui.transcribe.TranscribeScreen
 import kotlinx.coroutines.launch
 
 enum class TranscribroAppScreens(@StringRes val title: Int) {
     ActionRecognizeSpeech(title = R.string.app_name),
 
-    Start(title = R.string.start),
-    StartStart(title = R.string.start),
+    Transcribe(title = R.string.transcribe),
+    TranscribeStart(title = R.string.transcribe),
+    Keyboard(title = R.string.keyboard),
+    KeyboardStart(title = R.string.keyboard),
     Settings(title = R.string.settings),
     SettingsStart(title = R.string.settings),
     SettingsLicense(title = R.string.license),
     SettingsPrivacyPolicy(title = R.string.privacy_policy),
     SettingsCredits(title = R.string.credits),
-    Donate(title = R.string.donate),
-    DonateStart(title = R.string.donate),
-    Transcribe(title = R.string.transcribe),
-    TranscribeStart(title = R.string.transcribe),
 }
 
 val navBarScreens = listOf(
-    TranscribroAppScreens.Start,
-    TranscribroAppScreens.Settings,
     TranscribroAppScreens.Transcribe,
-    TranscribroAppScreens.Donate,
+    TranscribroAppScreens.Keyboard,
+    TranscribroAppScreens.Settings,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -168,11 +162,11 @@ fun TranscribroApp(
                             },
                             icon = {
                                 when (navBarScreen) {
-                                    TranscribroAppScreens.Start -> Icon(
+                                    TranscribroAppScreens.Keyboard -> Icon(
                                         imageVector = if (navBarSelected == navBarScreen) {
-                                            Icons.Filled.Home
+                                            Icons.Filled.Keyboard
                                         } else {
-                                            Icons.Outlined.Home
+                                            Icons.Outlined.Keyboard
                                         },
                                         contentDescription = null
                                     )
@@ -182,15 +176,6 @@ fun TranscribroApp(
                                             Icons.Filled.Settings
                                         } else {
                                             Icons.Outlined.Settings
-                                        },
-                                        contentDescription = null
-                                    )
-
-                                    TranscribroAppScreens.Donate -> Icon(
-                                        imageVector = if (navBarSelected == navBarScreen) {
-                                            Icons.Filled.VolunteerActivism
-                                        } else {
-                                            Icons.Outlined.VolunteerActivism
                                         },
                                         contentDescription = null
                                     )
@@ -224,7 +209,7 @@ fun TranscribroApp(
             } else if (actionRecognizeSpeech) {
                 TranscribroAppScreens.ActionRecognizeSpeech.name
             } else {
-                TranscribroAppScreens.Start.name
+                TranscribroAppScreens.Transcribe.name
             },
             modifier = Modifier.padding(innerPadding),
             enterTransition = {
@@ -257,13 +242,13 @@ fun TranscribroApp(
                 )
             }
             navigationWithDefaultSlideTransitions(
-                route = TranscribroAppScreens.Start,
-                startDestination = TranscribroAppScreens.StartStart.name,
+                route = TranscribroAppScreens.Keyboard,
+                startDestination = TranscribroAppScreens.KeyboardStart.name,
             ) {
                 composableWithDefaultSlideTransitions(
-                    route = TranscribroAppScreens.StartStart
+                    route = TranscribroAppScreens.KeyboardStart
                 ) {
-                    StartScreen()
+                    KeyboardScreen()
                 }
             }
             navigationWithDefaultSlideTransitions(
@@ -301,22 +286,6 @@ fun TranscribroApp(
                     CreditsScreen {
                         {} // No Rust?
                     }
-                }
-            }
-            navigationWithDefaultSlideTransitions(
-                route = TranscribroAppScreens.Donate,
-                startDestination = TranscribroAppScreens.DonateStart.name,
-            ) {
-                composableWithDefaultSlideTransitions(
-                    route = TranscribroAppScreens.DonateStart
-                ) {
-                    DonateStartScreen(
-                        showSnackbarError = {
-                            snackbarCoroutine.launch {
-                                snackbarHostState.showSnackbar(it)
-                            }
-                        }
-                    )
                 }
             }
             navigationWithDefaultSlideTransitions(

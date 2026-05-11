@@ -59,72 +59,14 @@ fun SettingsStartScreen(
                 description = stringResource(id = R.string.pitch_black_background_setting_description),
                 checked = preference.second.value,
                 onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
+                    preferencesViewModel.setPreference(preference.first, it)
                 }
             )
         }
+
         item {
             SettingsCategory(
-                stringResource(R.string.voice_input_keyboard_setting_category)
-            )
-        }
-        item {
-            val preference = preferencesUiState.autoSwitchToPreviousInputMethod
-            SettingsSwitchItem(
-                name = stringResource(id = R.string.auto_switch_to_previous_input_method_setting_name),
-                description = stringResource(id = R.string.auto_switch_to_previous_input_method_setting_description),
-                checked = preference.second.value,
-                onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
-                }
-            )
-        }
-        item {
-            val preference = preferencesUiState.autoStopRecognition
-            SettingsSwitchItem(
-                name = stringResource(id = R.string.auto_stop_recognition_setting_name),
-                description = stringResource(id = R.string.auto_stop_recognition_setting_description),
-                checked = preference.second.value,
-                onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
-                }
-            )
-        }
-        item {
-            val preference = preferencesUiState.autoStartRecognition
-            SettingsSwitchItem(
-                name = stringResource(id = R.string.auto_start_recognition_setting_name),
-                description = stringResource(id = R.string.auto_start_recognition_setting_description),
-                checked = preference.second.value,
-                onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
-                }
-            )
-        }
-        item {
-            val preference = preferencesUiState.autoSendTranscription
-            SettingsSwitchItem(
-                name = stringResource(id = R.string.auto_send_transcription_setting_name),
-                description = stringResource(id = R.string.auto_send_transcription_setting_description),
-                checked = preference.second.value,
-                onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
-                }
+                stringResource(R.string.shared_settings_category)
             )
         }
         item {
@@ -134,24 +76,7 @@ fun SettingsStartScreen(
                 description = stringResource(id = R.string.streaming_transcription_setting_description),
                 checked = preference.second.value,
                 onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
-                }
-            )
-        }
-        item {
-            val preference = preferencesUiState.diarizationEnabled
-            SettingsSwitchItem(
-                name = stringResource(id = R.string.diarization_setting_name),
-                description = stringResource(id = R.string.diarization_setting_description),
-                checked = preference.second.value,
-                onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
+                    preferencesViewModel.setPreference(preference.first, it)
                 }
             )
         }
@@ -162,13 +87,78 @@ fun SettingsStartScreen(
                 description = stringResource(id = R.string.noise_suppression_setting_description),
                 checked = preference.second.value,
                 onCheckedChange = {
-                    preferencesViewModel.setPreference(
-                        preference.first,
-                        it
-                    )
+                    preferencesViewModel.setPreference(preference.first, it)
                 }
             )
         }
+
+        item {
+            SettingsCategory(
+                stringResource(R.string.conversation_settings_category)
+            )
+        }
+        item {
+            val preference = preferencesUiState.diarizationEnabled
+            SettingsSwitchItem(
+                name = stringResource(id = R.string.diarization_setting_name),
+                description = stringResource(id = R.string.diarization_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(preference.first, it)
+                }
+            )
+        }
+
+        item {
+            SettingsCategory(
+                stringResource(R.string.keyboard_settings_category)
+            )
+        }
+        item {
+            val preference = preferencesUiState.autoSwitchToPreviousInputMethod
+            SettingsSwitchItem(
+                name = stringResource(id = R.string.auto_switch_to_previous_input_method_setting_name),
+                description = stringResource(id = R.string.auto_switch_to_previous_input_method_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(preference.first, it)
+                }
+            )
+        }
+        item {
+            val preference = preferencesUiState.autoStopRecognition
+            SettingsSwitchItem(
+                name = stringResource(id = R.string.auto_stop_recognition_setting_name),
+                description = stringResource(id = R.string.auto_stop_recognition_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(preference.first, it)
+                }
+            )
+        }
+        item {
+            val preference = preferencesUiState.autoStartRecognition
+            SettingsSwitchItem(
+                name = stringResource(id = R.string.auto_start_recognition_setting_name),
+                description = stringResource(id = R.string.auto_start_recognition_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(preference.first, it)
+                }
+            )
+        }
+        item {
+            val preference = preferencesUiState.autoSendTranscription
+            SettingsSwitchItem(
+                name = stringResource(id = R.string.auto_send_transcription_setting_name),
+                description = stringResource(id = R.string.auto_send_transcription_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(preference.first, it)
+                }
+            )
+        }
+
         item {
             SettingsCategory(
                 stringResource(R.string.about_setting_category)
@@ -180,7 +170,7 @@ fun SettingsStartScreen(
                 description = stringResource(id = R.string.view_source_code_setting_description),
                 icon = Icons.AutoMirrored.Filled.ExitToApp,
                 onClick = {
-                    localUriHandler.openUri("https://github.com/soupslurpr/Transcribro")
+                    localUriHandler.openUri("https://git.jan-leila.com/jan-leila/stenographerSis")
                 }
             )
         }

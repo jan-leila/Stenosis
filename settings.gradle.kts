@@ -13,6 +13,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Transcribro"
+rootProject.name = "Stenosis"
 include(":app")
 include(":lib")

@@ -224,7 +224,7 @@ class MainRecognitionService : RecognitionService() {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         this@MainRecognitionService,
-                        "Transcribro: ${e.modelName} model is incompatible. " +
+                        "Stenosis: ${e.modelName} model is incompatible. " +
                             "Recognition disabled until the wrapper is updated.",
                         Toast.LENGTH_LONG,
                     ).show()
@@ -884,7 +884,7 @@ class MainRecognitionService : RecognitionService() {
             withContext(Dispatchers.Main) {
                 Toast.makeText(
                     this@MainRecognitionService,
-                    "Transcribro: diarization disabled — ${e.modelName} model incompatible.",
+                    "Stenosis: diarization disabled — ${e.modelName} model incompatible.",
                     Toast.LENGTH_LONG,
                 ).show()
             }
