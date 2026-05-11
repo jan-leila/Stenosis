@@ -3,7 +3,9 @@ package dev.soupslurpr.transcribro.preferences
 import androidx.compose.runtime.mutableStateOf
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -30,130 +32,85 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
 
     /**
      * Populate the values of the preferences from the Preferences DataStore.
-     * This function is only called from this ViewModel's init
+     * This function is only called from this ViewModel's init.
+     *
+     * Migration: streaming / noise-suppression / VAD-model used to live under
+     * single shared keys ([LEGACY_STREAMING_KEY], [LEGACY_NOISE_KEY], [LEGACY_VAD_KEY]).
+     * When the per-feature key isn't set we fall back to the old shared value so
+     * existing users don't get reset to defaults on the first launch after the split.
      */
     private suspend fun populatePreferencesFromDatastore() {
         dataStore.data.map { preferences ->
+            val legacyStreaming = preferences[LEGACY_STREAMING_KEY]
+            val legacyNoise = preferences[LEGACY_NOISE_KEY]
+            val legacyVad = preferences[LEGACY_VAD_KEY]
             _uiState.update { currentState ->
                 currentState.copy(
-                    pitchBlackBackground = Pair(
-                        uiState.value.pitchBlackBackground.first,
-                        mutableStateOf(
-                            preferences[uiState.value.pitchBlackBackground.first] ?: uiState.value
-                                .pitchBlackBackground.second.value
-                        )
+                    pitchBlackBackground = bool(currentState.pitchBlackBackground, preferences),
+                    acceptedPrivacyPolicyAndLicense = bool(
+                        currentState.acceptedPrivacyPolicyAndLicense, preferences
                     ),
-                    acceptedPrivacyPolicyAndLicense = Pair(
-                        uiState.value.acceptedPrivacyPolicyAndLicense.first,
-                        mutableStateOf(
-                            preferences[uiState.value.acceptedPrivacyPolicyAndLicense.first] ?: uiState.value
-                                .acceptedPrivacyPolicyAndLicense.second.value
-                        )
+                    autoSwitchToPreviousInputMethod = bool(
+                        currentState.autoSwitchToPreviousInputMethod, preferences
                     ),
-                    autoSwitchToPreviousInputMethod = Pair(
-                        uiState.value.autoSwitchToPreviousInputMethod.first,
-                        mutableStateOf(
-                            preferences[uiState.value.autoSwitchToPreviousInputMethod
-                                .first] ?: uiState.value
-                                .autoSwitchToPreviousInputMethod.second.value
-                        )
+                    autoStopRecognition = bool(currentState.autoStopRecognition, preferences),
+                    autoStartRecognition = bool(currentState.autoStartRecognition, preferences),
+                    autoSendTranscription = bool(currentState.autoSendTranscription, preferences),
+                    diarizationEnabled = bool(currentState.diarizationEnabled, preferences),
+                    keyboardStreamingTranscription = bool(
+                        currentState.keyboardStreamingTranscription, preferences, legacyStreaming
                     ),
-                    autoStopRecognition = Pair(
-                        uiState.value.autoStopRecognition.first,
-                        mutableStateOf(
-                            preferences[uiState.value.autoStopRecognition
-                                .first] ?: uiState.value
-                                .autoStopRecognition.second.value
-                        )
+                    conversationStreamingTranscription = bool(
+                        currentState.conversationStreamingTranscription, preferences, legacyStreaming
                     ),
-                    autoStartRecognition = Pair(
-                        uiState.value.autoStartRecognition.first,
-                        mutableStateOf(
-                            preferences[uiState.value.autoStartRecognition
-                                .first] ?: uiState.value
-                                .autoStartRecognition.second.value
-                        )
+                    keyboardNoiseSuppressionEnabled = bool(
+                        currentState.keyboardNoiseSuppressionEnabled, preferences, legacyNoise
                     ),
-                    autoSendTranscription = Pair(
-                        uiState.value.autoSendTranscription.first,
-                        mutableStateOf(
-                            preferences[uiState.value.autoSendTranscription
-                                .first] ?: uiState.value
-                                .autoSendTranscription.second.value
-                        )
+                    conversationNoiseSuppressionEnabled = bool(
+                        currentState.conversationNoiseSuppressionEnabled, preferences, legacyNoise
                     ),
-                    streamingTranscription = Pair(
-                        uiState.value.streamingTranscription.first,
-                        mutableStateOf(
-                            preferences[uiState.value.streamingTranscription
-                                .first] ?: uiState.value
-                                .streamingTranscription.second.value
-                        )
+                    keyboardVadStartThreshold = float(
+                        currentState.keyboardVadStartThreshold, preferences
                     ),
-                    diarizationEnabled = Pair(
-                        uiState.value.diarizationEnabled.first,
-                        mutableStateOf(
-                            preferences[uiState.value.diarizationEnabled
-                                .first] ?: uiState.value
-                                .diarizationEnabled.second.value
-                        )
+                    keyboardVadEndThreshold = float(
+                        currentState.keyboardVadEndThreshold, preferences
                     ),
-                    noiseSuppressionEnabled = Pair(
-                        uiState.value.noiseSuppressionEnabled.first,
-                        mutableStateOf(
-                            preferences[uiState.value.noiseSuppressionEnabled
-                                .first] ?: uiState.value
-                                .noiseSuppressionEnabled.second.value
-                        )
+                    keyboardMinSilenceMs = int(currentState.keyboardMinSilenceMs, preferences),
+                    conversationVadStartThreshold = float(
+                        currentState.conversationVadStartThreshold, preferences
                     ),
-                    keyboardWhisperModelId = Pair(
-                        uiState.value.keyboardWhisperModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.keyboardWhisperModelId.first]
-                                ?: uiState.value.keyboardWhisperModelId.second.value
-                        )
+                    conversationVadEndThreshold = float(
+                        currentState.conversationVadEndThreshold, preferences
                     ),
-                    keyboardWhisperStreamingModelId = Pair(
-                        uiState.value.keyboardWhisperStreamingModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.keyboardWhisperStreamingModelId.first]
-                                ?: uiState.value.keyboardWhisperStreamingModelId.second.value
-                        )
+                    conversationMinSilenceMs = int(
+                        currentState.conversationMinSilenceMs, preferences
                     ),
-                    conversationWhisperModelId = Pair(
-                        uiState.value.conversationWhisperModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.conversationWhisperModelId.first]
-                                ?: uiState.value.conversationWhisperModelId.second.value
-                        )
+                    conversationCosineThreshold = float(
+                        currentState.conversationCosineThreshold, preferences
                     ),
-                    conversationWhisperStreamingModelId = Pair(
-                        uiState.value.conversationWhisperStreamingModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.conversationWhisperStreamingModelId.first]
-                                ?: uiState.value.conversationWhisperStreamingModelId.second.value
-                        )
+                    keyboardWhisperModelId = nullableString(
+                        currentState.keyboardWhisperModelId, preferences
                     ),
-                    conversationSegmenterModelId = Pair(
-                        uiState.value.conversationSegmenterModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.conversationSegmenterModelId.first]
-                                ?: uiState.value.conversationSegmenterModelId.second.value
-                        )
+                    keyboardWhisperStreamingModelId = nullableString(
+                        currentState.keyboardWhisperStreamingModelId, preferences
                     ),
-                    conversationEmbedderModelId = Pair(
-                        uiState.value.conversationEmbedderModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.conversationEmbedderModelId.first]
-                                ?: uiState.value.conversationEmbedderModelId.second.value
-                        )
+                    conversationWhisperModelId = nullableString(
+                        currentState.conversationWhisperModelId, preferences
                     ),
-                    vadModelId = Pair(
-                        uiState.value.vadModelId.first,
-                        mutableStateOf(
-                            preferences[uiState.value.vadModelId.first]
-                                ?: uiState.value.vadModelId.second.value
-                        )
+                    conversationWhisperStreamingModelId = nullableString(
+                        currentState.conversationWhisperStreamingModelId, preferences
+                    ),
+                    conversationSegmenterModelId = nullableString(
+                        currentState.conversationSegmenterModelId, preferences
+                    ),
+                    conversationEmbedderModelId = nullableString(
+                        currentState.conversationEmbedderModelId, preferences
+                    ),
+                    keyboardVadModelId = nullableString(
+                        currentState.keyboardVadModelId, preferences, legacyVad
+                    ),
+                    conversationVadModelId = nullableString(
+                        currentState.conversationVadModelId, preferences, legacyVad
                     ),
                 )
             }
@@ -184,6 +141,39 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
         }
     }
 
+    @JvmName("setIntPreference")
+    fun setPreference(key: Preferences.Key<Int>, value: Int) {
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                preferences[key] = value
+            }
+        }
+    }
+
+    @JvmName("setFloatPreference")
+    fun setPreference(key: Preferences.Key<Float>, value: Float) {
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                preferences[key] = value
+            }
+        }
+    }
+
+    /** Reset a stored preference to its compile-time default. */
+    @JvmName("resetIntPreference")
+    fun resetPreference(key: Preferences.Key<Int>) {
+        viewModelScope.launch {
+            dataStore.edit { preferences -> preferences.remove(key) }
+        }
+    }
+
+    @JvmName("resetFloatPreference")
+    fun resetPreference(key: Preferences.Key<Float>) {
+        viewModelScope.launch {
+            dataStore.edit { preferences -> preferences.remove(key) }
+        }
+    }
+
     class PreferencesViewModelFactory(private val dataStore: DataStore<Preferences>) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(PreferencesViewModel::class.java)) {
@@ -192,5 +182,48 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
             }
             throw IllegalArgumentException("Unknown ViewModel class $modelClass")
         }
+    }
+
+    companion object {
+        // Old shared preference keys, retained only so populate-time migration can
+        // read their values. Nothing writes to them anymore; the per-feature keys
+        // own the canonical state. Defaults match the originals (true / true / "silero-vad-v5").
+        private val LEGACY_STREAMING_KEY = booleanPreferencesKey("STREAMING_TRANSCRIPTION")
+        private val LEGACY_NOISE_KEY = booleanPreferencesKey("NOISE_SUPPRESSION_ENABLED")
+        private val LEGACY_VAD_KEY = stringPreferencesKey("VAD_MODEL_ID")
+
+        private fun bool(
+            pair: Pair<Preferences.Key<Boolean>, androidx.compose.runtime.MutableState<Boolean>>,
+            preferences: Preferences,
+            fallback: Boolean? = null,
+        ): Pair<Preferences.Key<Boolean>, androidx.compose.runtime.MutableState<Boolean>> = Pair(
+            pair.first,
+            mutableStateOf(preferences[pair.first] ?: fallback ?: pair.second.value),
+        )
+
+        private fun int(
+            pair: Pair<Preferences.Key<Int>, androidx.compose.runtime.MutableState<Int>>,
+            preferences: Preferences,
+        ): Pair<Preferences.Key<Int>, androidx.compose.runtime.MutableState<Int>> = Pair(
+            pair.first,
+            mutableStateOf(preferences[pair.first] ?: pair.second.value),
+        )
+
+        private fun float(
+            pair: Pair<Preferences.Key<Float>, androidx.compose.runtime.MutableState<Float>>,
+            preferences: Preferences,
+        ): Pair<Preferences.Key<Float>, androidx.compose.runtime.MutableState<Float>> = Pair(
+            pair.first,
+            mutableStateOf(preferences[pair.first] ?: pair.second.value),
+        )
+
+        private fun nullableString(
+            pair: Pair<Preferences.Key<String>, androidx.compose.runtime.MutableState<String?>>,
+            preferences: Preferences,
+            fallback: String? = null,
+        ): Pair<Preferences.Key<String>, androidx.compose.runtime.MutableState<String?>> = Pair(
+            pair.first,
+            mutableStateOf(preferences[pair.first] ?: fallback ?: pair.second.value),
+        )
     }
 }

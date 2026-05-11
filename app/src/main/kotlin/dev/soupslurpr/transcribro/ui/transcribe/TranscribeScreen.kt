@@ -79,13 +79,20 @@ fun TranscribeScreen() {
     )
     val preferencesUiState by preferencesViewModel.uiState.collectAsState()
     val diarizationEnabled = preferencesUiState.diarizationEnabled.second.value
-    val noiseSuppressionEnabled = preferencesUiState.noiseSuppressionEnabled.second.value
+    val streamingTranscription =
+        preferencesUiState.conversationStreamingTranscription.second.value
+    val noiseSuppressionEnabled =
+        preferencesUiState.conversationNoiseSuppressionEnabled.second.value
     val whisperModelId = preferencesUiState.conversationWhisperModelId.second.value
     val whisperStreamingModelId =
         preferencesUiState.conversationWhisperStreamingModelId.second.value
-    val vadModelId = preferencesUiState.vadModelId.second.value
+    val vadModelId = preferencesUiState.conversationVadModelId.second.value
     val segmenterModelId = preferencesUiState.conversationSegmenterModelId.second.value
     val embedderModelId = preferencesUiState.conversationEmbedderModelId.second.value
+    val vadStartThreshold = preferencesUiState.conversationVadStartThreshold.second.value
+    val vadEndThreshold = preferencesUiState.conversationVadEndThreshold.second.value
+    val minSilenceMs = preferencesUiState.conversationMinSilenceMs.second.value
+    val cosineThreshold = preferencesUiState.conversationCosineThreshold.second.value
 
     val installedRepo = remember { InstalledModelsRepository(context) }
     val installedState by installedRepo.state.collectAsState()
@@ -260,11 +267,24 @@ fun TranscribeScreen() {
                                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                                 // Long-form recognition: don't auto-stop on first VAD end.
                                 putExtra(MainRecognitionService.EXTRA_AUTO_STOP, false)
-                                putExtra(MainRecognitionService.EXTRA_STREAMING, true)
+                                putExtra(MainRecognitionService.EXTRA_STREAMING, streamingTranscription)
                                 putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarizationEnabled)
                                 putExtra(
                                     MainRecognitionService.EXTRA_NOISE_SUPPRESSION,
                                     noiseSuppressionEnabled,
+                                )
+                                putExtra(
+                                    MainRecognitionService.EXTRA_VAD_START_THRESHOLD,
+                                    vadStartThreshold,
+                                )
+                                putExtra(
+                                    MainRecognitionService.EXTRA_VAD_END_THRESHOLD,
+                                    vadEndThreshold,
+                                )
+                                putExtra(MainRecognitionService.EXTRA_MIN_SILENCE_MS, minSilenceMs)
+                                putExtra(
+                                    MainRecognitionService.EXTRA_COSINE_THRESHOLD,
+                                    cosineThreshold,
                                 )
                                 if (whisperModelId != null) {
                                     putExtra(MainRecognitionService.EXTRA_WHISPER_MODEL_ID, whisperModelId)

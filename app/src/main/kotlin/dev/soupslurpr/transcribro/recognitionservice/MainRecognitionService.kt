@@ -73,6 +73,14 @@ class MainRecognitionService : RecognitionService() {
         const val EXTRA_VAD_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_VAD_MODEL_ID"
         const val EXTRA_SEGMENTER_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_SEGMENTER_MODEL_ID"
         const val EXTRA_EMBEDDER_MODEL_ID = "dev.soupslurpr.transcribro.EXTRA_EMBEDDER_MODEL_ID"
+        // Per-session VAD tunables. Floats are probability thresholds (0..1); the
+        // silence value is milliseconds of quiet after speech drops below the end
+        // threshold before the segment finalizes.
+        const val EXTRA_VAD_START_THRESHOLD = "dev.soupslurpr.transcribro.EXTRA_VAD_START_THRESHOLD"
+        const val EXTRA_VAD_END_THRESHOLD = "dev.soupslurpr.transcribro.EXTRA_VAD_END_THRESHOLD"
+        const val EXTRA_MIN_SILENCE_MS = "dev.soupslurpr.transcribro.EXTRA_MIN_SILENCE_MS"
+        // Diarization cosine-distance same-speaker threshold (conversation only).
+        const val EXTRA_COSINE_THRESHOLD = "dev.soupslurpr.transcribro.EXTRA_COSINE_THRESHOLD"
         // Speaker id (Int) attached to a partial bundle when diarization is on.
         // The display name lookup happens on the receiver via SpeakerLabelStore.
         const val RESULTS_SPEAKER_ID = "dev.soupslurpr.transcribro.RESULTS_SPEAKER_ID"
@@ -144,6 +152,14 @@ class MainRecognitionService : RecognitionService() {
     private var activeSegmenterModelId: String? = null
     private var activeEmbedderModelId: String? = null
 
+    // Runtime VAD tunables — set per-session from EXTRA_* before the detector factory
+    // runs, so a brand-new detector picks up the right values on first construction.
+    // For an already-cached detector we additionally call `updateParams` after the
+    // ensure-loaded step so threshold-only changes don't force an ONNX reload.
+    private var activeVadStartThreshold: Float = 0.6f
+    private var activeVadEndThreshold: Float = 0.45f
+    private var activeMinSilenceMs: Int = 3000
+
     // What was actually loaded into each cached context — used to detect "user switched
     // models, reload required". `null` means nothing loaded yet.
     private var loadedWhisperFinalModelId: String? = null
@@ -201,19 +217,16 @@ class MainRecognitionService : RecognitionService() {
             object : SileroVadApi {
                 override fun getSileroVadDetector(): SileroVadDetector {
                     val SAMPLE_RATE = 16000
-                    val START_THRESHOLD = 0.6f
-                    val END_THRESHOLD = 0.45f
-                    val MIN_SILENCE_DURATION_MS = 3000
                     val SPEECH_PAD_MS = 0
 
                     val modelBytes = installedFile(activeVadModelId).readBytes()
 
                     return SileroVadDetector(
                         modelBytes,
-                        START_THRESHOLD,
-                        END_THRESHOLD,
+                        activeVadStartThreshold,
+                        activeVadEndThreshold,
                         SAMPLE_RATE,
-                        MIN_SILENCE_DURATION_MS,
+                        activeMinSilenceMs,
                         SPEECH_PAD_MS
                     )
                 }
@@ -276,6 +289,14 @@ class MainRecognitionService : RecognitionService() {
             sileroVadRepository.preload()
             loadedVadModelId = requestedVad
         }
+        // Push the latest VAD tunables into the cached detector regardless of whether
+        // the model itself changed — threshold-only adjustments shouldn't pay the cost
+        // of reloading the ONNX context.
+        sileroVadRepository.updateParams(
+            startThreshold = activeVadStartThreshold,
+            endThreshold = activeVadEndThreshold,
+            minSilenceDurationMs = activeMinSilenceMs,
+        )
     }
 
     /** Same idea, but for the diarization pair. Called only when diarization is enabled. */
@@ -336,6 +357,22 @@ class MainRecognitionService : RecognitionService() {
             recognizerIntent?.extras?.getString(EXTRA_VAD_MODEL_ID) ?: "silero-vad-v5"
         val requestedSegmenterId = recognizerIntent?.extras?.getString(EXTRA_SEGMENTER_MODEL_ID)
         val requestedEmbedderId = recognizerIntent?.extras?.getString(EXTRA_EMBEDDER_MODEL_ID)
+        val requestedVadStartThreshold =
+            recognizerIntent?.extras?.getFloat(EXTRA_VAD_START_THRESHOLD, 0.6f) ?: 0.6f
+        val requestedVadEndThreshold =
+            recognizerIntent?.extras?.getFloat(EXTRA_VAD_END_THRESHOLD, 0.45f) ?: 0.45f
+        val requestedMinSilenceMs =
+            recognizerIntent?.extras?.getInt(EXTRA_MIN_SILENCE_MS, 3000) ?: 3000
+        val requestedCosineThreshold = recognizerIntent?.extras?.getFloat(
+            EXTRA_COSINE_THRESHOLD,
+            dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerRegistry.DEFAULT_THRESHOLD,
+        ) ?: dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerRegistry.DEFAULT_THRESHOLD
+        // Stash the VAD tunables so getSileroVadDetector() picks them up on first
+        // construction; ensureCoreModelsLoaded follows up with an updateParams call
+        // for the case where the detector is already cached.
+        activeVadStartThreshold = requestedVadStartThreshold
+        activeVadEndThreshold = requestedVadEndThreshold
+        activeMinSilenceMs = requestedMinSilenceMs
         val speechStartPadMs = 24000
 
         Log.i(
@@ -507,6 +544,8 @@ class MainRecognitionService : RecognitionService() {
                 requestedVadId = requestedVadId,
                 requestedSegmenterId = requestedSegmenterId,
                 requestedEmbedderId = requestedEmbedderId,
+                requestedMinSilenceMs = requestedMinSilenceMs,
+                requestedCosineThreshold = requestedCosineThreshold,
             )
             return
         }
@@ -988,6 +1027,8 @@ class MainRecognitionService : RecognitionService() {
         requestedVadId: String?,
         requestedSegmenterId: String?,
         requestedEmbedderId: String?,
+        requestedMinSilenceMs: Int,
+        requestedCosineThreshold: Float,
     ): Job = recordAndTranscribeScope.launch diarize@{
         // Load (or switch) whisper + VAD before the audio loop starts. Diarization
         // models are loaded inside the existing try below.
@@ -1070,6 +1111,7 @@ class MainRecognitionService : RecognitionService() {
         // Reset per-session state: each new diarization session starts speaker numbering
         // from 0. (The label store in the UI also resets via its own subscription.)
         speakerRegistry.reset()
+        speakerRegistry.setThreshold(requestedCosineThreshold)
 
         // Collect committed speaker segments so we can assemble a final transcript when
         // recognition ends. Append-only; the recordAndTranscribe coroutine is the sole
@@ -1087,6 +1129,7 @@ class MainRecognitionService : RecognitionService() {
             segmenter = segmenter,
             embedder = embedder,
             registry = speakerRegistry,
+            silenceMs = requestedMinSilenceMs,
             onSegmentClosed = { event ->
                 if (event.sampleRangeEnd > lastCommitEndSample) {
                     lastCommitEndSample = event.sampleRangeEnd

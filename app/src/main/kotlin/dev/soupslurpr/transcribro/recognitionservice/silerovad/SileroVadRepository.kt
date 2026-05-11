@@ -42,4 +42,9 @@ class SileroVadRepository(
     fun reset() {
         sileroVadDetector.value?.reset()
     }
+
+    /** Push fresh VAD tunables into the cached detector, if any. */
+    fun updateParams(startThreshold: Float, endThreshold: Float, minSilenceDurationMs: Int) {
+        sileroVadDetector.value?.updateParams(startThreshold, endThreshold, minSilenceDurationMs)
+    }
 }

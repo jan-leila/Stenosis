@@ -4,6 +4,8 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 
 /** Preference pairs, the first is the preference key, and the second is the default value. */
@@ -44,12 +46,6 @@ data class PreferencesUiState(
         mutableStateOf(false)
     ),
 
-    /** Whether to show a live-updating preview of the current speech segment as it is being spoken. */
-    val streamingTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
-        (booleanPreferencesKey("STREAMING_TRANSCRIPTION")),
-        mutableStateOf(true)
-    ),
-
     /**
      * Whether to run speaker diarization (pyannote + wespeaker) and label each
      * committed segment with a speaker id. Off by default — adds ~30MB of model RAM
@@ -61,16 +57,87 @@ data class PreferencesUiState(
         mutableStateOf(false)
     ),
 
+    // --- Per-feature streaming / noise suppression --------------------------------
+    // The two transcription modes run in very different acoustic environments, so
+    // every audio-pipeline knob is duplicated per mode rather than shared.
+
+    /** Live preview during keyboard transcription. */
+    val keyboardStreamingTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("KEYBOARD_STREAMING_TRANSCRIPTION"),
+        mutableStateOf(true),
+    ),
+
+    /** Live preview during conversation transcription. */
+    val conversationStreamingTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("CONVERSATION_STREAMING_TRANSCRIPTION"),
+        mutableStateOf(true),
+    ),
+
+    /** RNNoise denoising applied to keyboard mic input. */
+    val keyboardNoiseSuppressionEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("KEYBOARD_NOISE_SUPPRESSION_ENABLED"),
+        mutableStateOf(true),
+    ),
+
+    /** RNNoise denoising applied to conversation mic input. */
+    val conversationNoiseSuppressionEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("CONVERSATION_NOISE_SUPPRESSION_ENABLED"),
+        mutableStateOf(true),
+    ),
+
+    // --- Per-feature VAD tunables -------------------------------------------------
+    // SileroVadDetector takes start/end probability thresholds and a minimum silence
+    // window. All three live behind the Advanced section because the failure modes
+    // (cutting off mid-sentence, dropping quiet starts) need real testing to tune.
+
+    /** Silero VAD probability ≥ this triggers segment start (keyboard). */
+    val keyboardVadStartThreshold: Pair<Preferences.Key<Float>, MutableState<Float>> = Pair(
+        floatPreferencesKey("KEYBOARD_VAD_START_THRESHOLD"),
+        mutableStateOf(DEFAULT_VAD_START_THRESHOLD),
+    ),
+
+    /** Silero VAD probability falling below this starts the silence timer (keyboard). */
+    val keyboardVadEndThreshold: Pair<Preferences.Key<Float>, MutableState<Float>> = Pair(
+        floatPreferencesKey("KEYBOARD_VAD_END_THRESHOLD"),
+        mutableStateOf(DEFAULT_VAD_END_THRESHOLD),
+    ),
+
+    /** Quiet duration (ms) after which the keyboard finalizes the current segment. */
+    val keyboardMinSilenceMs: Pair<Preferences.Key<Int>, MutableState<Int>> = Pair(
+        intPreferencesKey("KEYBOARD_MIN_SILENCE_MS"),
+        mutableStateOf(DEFAULT_MIN_SILENCE_MS),
+    ),
+
+    /** Silero VAD probability ≥ this triggers segment start (conversation). */
+    val conversationVadStartThreshold: Pair<Preferences.Key<Float>, MutableState<Float>> = Pair(
+        floatPreferencesKey("CONVERSATION_VAD_START_THRESHOLD"),
+        mutableStateOf(DEFAULT_VAD_START_THRESHOLD),
+    ),
+
+    /** Silero VAD probability falling below this starts the silence timer (conversation). */
+    val conversationVadEndThreshold: Pair<Preferences.Key<Float>, MutableState<Float>> = Pair(
+        floatPreferencesKey("CONVERSATION_VAD_END_THRESHOLD"),
+        mutableStateOf(DEFAULT_VAD_END_THRESHOLD),
+    ),
+
     /**
-     * Whether to apply RNNoise denoising to the mic input before transcription. On
-     * by default — it noticeably improves whisper accuracy on noisy recordings and
-     * helps the speaker-embedding model produce cleaner clusters. Adds ~10ms of
-     * input latency and a small CPU cost (one 33-tap FIR resample plus the RNN per
-     * 10ms frame).
+     * Quiet duration (ms) after which a conversation segment closes. Reused by the
+     * diarization manager as the per-speaker silence window, since both knobs mean
+     * the same thing to a user: "how long of quiet ends a turn".
      */
-    val noiseSuppressionEnabled: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
-        (booleanPreferencesKey("NOISE_SUPPRESSION_ENABLED")),
-        mutableStateOf(true)
+    val conversationMinSilenceMs: Pair<Preferences.Key<Int>, MutableState<Int>> = Pair(
+        intPreferencesKey("CONVERSATION_MIN_SILENCE_MS"),
+        mutableStateOf(DEFAULT_MIN_SILENCE_MS),
+    ),
+
+    /**
+     * Cosine distance below which two embeddings are treated as the same speaker.
+     * Tune up if speakers get over-split, down if they get over-merged. See
+     * [dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerRegistry].
+     */
+    val conversationCosineThreshold: Pair<Preferences.Key<Float>, MutableState<Float>> = Pair(
+        floatPreferencesKey("CONVERSATION_COSINE_THRESHOLD"),
+        mutableStateOf(DEFAULT_COSINE_THRESHOLD),
     ),
 
     // --- Per-feature model selections ---------------------------------------------
@@ -121,9 +188,22 @@ data class PreferencesUiState(
         mutableStateOf(null),
     ),
 
-    /** Active VAD model. Shared by both modes; only one VAD entry exists for now. */
-    val vadModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
-        stringPreferencesKey("VAD_MODEL_ID"),
+    /** Active VAD model used by keyboard transcription. */
+    val keyboardVadModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("KEYBOARD_VAD_MODEL_ID"),
         mutableStateOf("silero-vad-v5"),
     ),
-)
+
+    /** Active VAD model used by conversation transcription. */
+    val conversationVadModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
+        stringPreferencesKey("CONVERSATION_VAD_MODEL_ID"),
+        mutableStateOf("silero-vad-v5"),
+    ),
+) {
+    companion object {
+        const val DEFAULT_VAD_START_THRESHOLD: Float = 0.6f
+        const val DEFAULT_VAD_END_THRESHOLD: Float = 0.45f
+        const val DEFAULT_MIN_SILENCE_MS: Int = 3000
+        const val DEFAULT_COSINE_THRESHOLD: Float = 0.35f
+    }
+}

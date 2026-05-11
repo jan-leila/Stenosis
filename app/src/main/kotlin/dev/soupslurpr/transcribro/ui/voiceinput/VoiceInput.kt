@@ -153,9 +153,9 @@ class VoiceInput : InputMethodService() {
 
             val autoStartRecognition by preferencesUiState.autoStartRecognition.second
 
-            val streamingTranscription by preferencesUiState.streamingTranscription.second
+            val streamingTranscription by preferencesUiState.keyboardStreamingTranscription.second
 
-            val noiseSuppression by preferencesUiState.noiseSuppressionEnabled.second
+            val noiseSuppression by preferencesUiState.keyboardNoiseSuppressionEnabled.second
 
             // Diarization is a conversation-mode-only feature. The keyboard always
             // transcribes a single speaker (the user) so we never enable it here,
@@ -165,7 +165,10 @@ class VoiceInput : InputMethodService() {
             val keyboardWhisperModelId by preferencesUiState.keyboardWhisperModelId.second
             val keyboardWhisperStreamingModelId by
                 preferencesUiState.keyboardWhisperStreamingModelId.second
-            val vadModelId by preferencesUiState.vadModelId.second
+            val vadModelId by preferencesUiState.keyboardVadModelId.second
+            val vadStartThreshold by preferencesUiState.keyboardVadStartThreshold.second
+            val vadEndThreshold by preferencesUiState.keyboardVadEndThreshold.second
+            val minSilenceMs by preferencesUiState.keyboardMinSilenceMs.second
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -496,6 +499,9 @@ class VoiceInput : InputMethodService() {
                                                         keyboardWhisperModelId,
                                                         keyboardWhisperStreamingModelId,
                                                         vadModelId,
+                                                        vadStartThreshold,
+                                                        vadEndThreshold,
+                                                        minSilenceMs,
                                                     )
                                                 )
                                             }
@@ -607,6 +613,9 @@ class VoiceInput : InputMethodService() {
                                                                 keyboardWhisperModelId,
                                                                 keyboardWhisperStreamingModelId,
                                                                 vadModelId,
+                                                                vadStartThreshold,
+                                                                vadEndThreshold,
+                                                                minSilenceMs,
                                                             )
                                                         )
                                                     }
@@ -1016,6 +1025,9 @@ class VoiceInput : InputMethodService() {
         whisperModelId: String?,
         whisperStreamingModelId: String?,
         vadModelId: String?,
+        vadStartThreshold: Float,
+        vadEndThreshold: Float,
+        minSilenceMs: Int,
     ): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -1023,6 +1035,9 @@ class VoiceInput : InputMethodService() {
             putExtra(MainRecognitionService.EXTRA_STREAMING, streaming)
             putExtra(MainRecognitionService.EXTRA_DIARIZATION, diarization)
             putExtra(MainRecognitionService.EXTRA_NOISE_SUPPRESSION, noiseSuppression)
+            putExtra(MainRecognitionService.EXTRA_VAD_START_THRESHOLD, vadStartThreshold)
+            putExtra(MainRecognitionService.EXTRA_VAD_END_THRESHOLD, vadEndThreshold)
+            putExtra(MainRecognitionService.EXTRA_MIN_SILENCE_MS, minSilenceMs)
             if (whisperModelId != null) {
                 putExtra(MainRecognitionService.EXTRA_WHISPER_MODEL_ID, whisperModelId)
             }

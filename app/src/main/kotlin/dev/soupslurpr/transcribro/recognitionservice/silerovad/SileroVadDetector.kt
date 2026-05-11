@@ -15,16 +15,16 @@ class SileroVadDetector(
     private val model: SileroVadOnnxModel
 
     // Threshold for speech start
-    private val startThreshold: Float
+    private var startThreshold: Float
 
     // Threshold for speech end
-    private val endThreshold: Float
+    private var endThreshold: Float
 
     // Sampling rate
     private val samplingRate: Int
 
     // Minimum number of silence samples to determine the end threshold of speech
-    private val minSilenceSamples: Float
+    private var minSilenceSamples: Float
 
     // Additional number of samples for speech start or end to calculate speech start or end time
     private val speechPadSamples: Float
@@ -52,6 +52,17 @@ class SileroVadDetector(
         this.speechPadSamples = samplingRate * speechPadMs / 1000f
         // Reset the state
         reset()
+    }
+
+    /**
+     * Update the runtime tunables without rebuilding the ONNX context. Used between
+     * recognition sessions when the user changes the per-feature VAD settings — we
+     * keep the already-loaded model and just swap the thresholds and silence window.
+     */
+    fun updateParams(startThreshold: Float, endThreshold: Float, minSilenceDurationMs: Int) {
+        this.startThreshold = startThreshold
+        this.endThreshold = endThreshold
+        this.minSilenceSamples = samplingRate * minSilenceDurationMs / 1000f
     }
 
     // Method to reset the state, including the model state, trigger state, temporary end time, and current sample count

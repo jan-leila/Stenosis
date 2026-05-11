@@ -37,7 +37,19 @@
     <string name="whisper_streaming_model_picker_name">Streaming preview model</string>
     <string name="whisper_streaming_model_picker_description">Optional smaller model just for the live preview. Leave as None to reuse the transcription model.</string>
     <string name="vad_model_picker_name">Voice activity model</string>
-    <string name="vad_model_picker_description">Used by both modes to detect speech</string>
+    <string name="vad_model_picker_description">Detects when speech starts and stops</string>
+    <string name="advanced_setting_category">Advanced</string>
+    <string name="advanced_setting_show">Show advanced</string>
+    <string name="advanced_setting_hide">Hide advanced</string>
+    <string name="reset_to_default_content_description">Reset to default</string>
+    <string name="min_silence_setting_name">Silence before finalize (ms)</string>
+    <string name="min_silence_setting_description">How long of quiet ends the current segment. Lower = faster commits but more mid-thought cuts; higher = waits longer for the speaker to resume.</string>
+    <string name="vad_start_threshold_setting_name">Speech start threshold</string>
+    <string name="vad_start_threshold_setting_description">Voice-activity probability (0.0–1.0) required to enter a segment. Higher = ignores quiet speech; lower = false-starts on background noise.</string>
+    <string name="vad_end_threshold_setting_name">Speech end threshold</string>
+    <string name="vad_end_threshold_setting_description">Voice-activity probability (0.0–1.0) below which the silence timer starts. Should be lower than the start threshold.</string>
+    <string name="cosine_threshold_setting_name">Speaker match threshold</string>
+    <string name="cosine_threshold_setting_description">Cosine distance below which two voices are treated as the same speaker. Higher = merges similar voices; lower = splits the same voice into more speakers.</string>
     <string name="segmenter_model_picker_name">Speaker segmenter</string>
     <string name="segmenter_model_picker_description">Detects per-frame speaker activity</string>
     <string name="embedder_model_picker_name">Speaker embedder</string>

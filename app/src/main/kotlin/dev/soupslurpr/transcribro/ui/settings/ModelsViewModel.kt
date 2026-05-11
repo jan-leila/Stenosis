@@ -62,7 +62,10 @@ class ModelsViewModel(application: Application) : AndroidViewModel(application) 
                     defaults.keyboardWhisperModelId.first,
                     defaults.conversationWhisperModelId.first,
                 ),
-                ModelKind.VoiceActivityDetector to listOf(defaults.vadModelId.first),
+                ModelKind.VoiceActivityDetector to listOf(
+                    defaults.keyboardVadModelId.first,
+                    defaults.conversationVadModelId.first,
+                ),
                 ModelKind.SpeakerSegmenter to listOf(defaults.conversationSegmenterModelId.first),
                 ModelKind.SpeakerEmbedder to listOf(defaults.conversationEmbedderModelId.first),
             )

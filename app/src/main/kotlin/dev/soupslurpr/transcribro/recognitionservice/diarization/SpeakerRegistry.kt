@@ -29,7 +29,7 @@ import kotlin.math.sqrt
  * graph.
  */
 class SpeakerRegistry(
-    private val sameSpeakerThreshold: Float = DEFAULT_THRESHOLD,
+    sameSpeakerThreshold: Float = DEFAULT_THRESHOLD,
 ) {
     private class Speaker(
         val id: Int,
@@ -40,6 +40,19 @@ class SpeakerRegistry(
 
     private val lock = Any()
     private val speakers = mutableListOf<Speaker>()
+
+    /**
+     * Same-speaker cosine distance threshold. Settable so a long-lived registry can
+     * pick up a new value when the user adjusts it between recognition sessions,
+     * without throwing away the speakers it has already learned. Reads/writes guarded
+     * by [lock] alongside the speakers list.
+     */
+    private var sameSpeakerThreshold: Float = sameSpeakerThreshold
+
+    /** Update the same-speaker threshold for subsequent [assign] calls. */
+    fun setThreshold(threshold: Float) = synchronized(lock) {
+        sameSpeakerThreshold = threshold
+    }
 
     /**
      * Assign [embedding] (expected L2-normalized) to the closest existing speaker if its
