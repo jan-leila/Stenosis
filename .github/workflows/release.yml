@@ -85,7 +85,7 @@ jobs:
         if: steps.version.outputs.publish == 'true'
         run: |
           previous="$(git tag --list 'v[0-9]*' | sed 's/^v//' | grep -E '^[0-9]+$' | sort -n | tail -n 1)"
-          echo "newest other release tag: ${previous:+v$previous}${previous:-none}"
+          echo "newest release tag number: ${previous:-none}"
           if [ -n "$previous" ]; then
             test "$CODE" -gt "$previous"
           fi
