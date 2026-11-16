@@ -169,6 +169,7 @@ class VoiceInput : InputMethodService() {
             val vadStartThreshold by preferencesUiState.keyboardVadStartThreshold.second
             val vadEndThreshold by preferencesUiState.keyboardVadEndThreshold.second
             val minSilenceMs by preferencesUiState.keyboardMinSilenceMs.second
+            val serverTranscription by preferencesUiState.keyboardServerTranscription.second
 
             val snackbarHostState = remember { SnackbarHostState() }
 
@@ -307,6 +308,21 @@ class VoiceInput : InputMethodService() {
                                                         SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_CLIENT -> {
                                                             cancelSnackbarJobAndLaunch(
                                                                 "Recognition is finishing, please wait or cancel.",
+                                                                withDismissAction = true,
+                                                                duration = SnackbarDuration.Short
+                                                            )
+                                                        }
+
+                                                        // Raised only by server transcription
+                                                        // when the request failed and there was
+                                                        // no on-device model to fall back to. The
+                                                        // service also toasts the specific cause.
+                                                        SpeechRecognizer.ERROR_NETWORK,
+                                                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+                                                        SpeechRecognizer.ERROR_SERVER -> {
+                                                            isRecognizing = false
+                                                            cancelSnackbarJobAndLaunch(
+                                                                "Server transcription failed.",
                                                                 withDismissAction = true,
                                                                 duration = SnackbarDuration.Short
                                                             )
@@ -502,6 +518,7 @@ class VoiceInput : InputMethodService() {
                                                         vadStartThreshold,
                                                         vadEndThreshold,
                                                         minSilenceMs,
+                                                        serverTranscription,
                                                     )
                                                 )
                                             }
@@ -616,6 +633,7 @@ class VoiceInput : InputMethodService() {
                                                                 vadStartThreshold,
                                                                 vadEndThreshold,
                                                                 minSilenceMs,
+                                                                serverTranscription,
                                                             )
                                                         )
                                                     }
@@ -1028,6 +1046,7 @@ class VoiceInput : InputMethodService() {
         vadStartThreshold: Float,
         vadEndThreshold: Float,
         minSilenceMs: Int,
+        serverTranscription: Boolean,
     ): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -1038,6 +1057,7 @@ class VoiceInput : InputMethodService() {
             putExtra(MainRecognitionService.EXTRA_VAD_START_THRESHOLD, vadStartThreshold)
             putExtra(MainRecognitionService.EXTRA_VAD_END_THRESHOLD, vadEndThreshold)
             putExtra(MainRecognitionService.EXTRA_MIN_SILENCE_MS, minSilenceMs)
+            putExtra(MainRecognitionService.EXTRA_SERVER_TRANSCRIPTION, serverTranscription)
             if (whisperModelId != null) {
                 putExtra(MainRecognitionService.EXTRA_WHISPER_MODEL_ID, whisperModelId)
             }

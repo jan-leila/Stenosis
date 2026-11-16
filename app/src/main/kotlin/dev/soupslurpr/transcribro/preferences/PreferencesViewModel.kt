@@ -112,6 +112,15 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                     conversationVadModelId = nullableString(
                         currentState.conversationVadModelId, preferences, legacyVad
                     ),
+                    keyboardServerTranscription = bool(
+                        currentState.keyboardServerTranscription, preferences
+                    ),
+                    conversationServerTranscription = bool(
+                        currentState.conversationServerTranscription, preferences
+                    ),
+                    serverUrl = string(currentState.serverUrl, preferences),
+                    serverModel = string(currentState.serverModel, preferences),
+                    serverToken = string(currentState.serverToken, preferences),
                 )
             }
         }.collect()
@@ -213,6 +222,14 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
             pair: Pair<Preferences.Key<Float>, androidx.compose.runtime.MutableState<Float>>,
             preferences: Preferences,
         ): Pair<Preferences.Key<Float>, androidx.compose.runtime.MutableState<Float>> = Pair(
+            pair.first,
+            mutableStateOf(preferences[pair.first] ?: pair.second.value),
+        )
+
+        private fun string(
+            pair: Pair<Preferences.Key<String>, androidx.compose.runtime.MutableState<String>>,
+            preferences: Preferences,
+        ): Pair<Preferences.Key<String>, androidx.compose.runtime.MutableState<String>> = Pair(
             pair.first,
             mutableStateOf(preferences[pair.first] ?: pair.second.value),
         )

@@ -6,6 +6,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.RemoteException
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
@@ -18,10 +20,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whispercpp.rnnoise.Denoiser
 import com.whispercpp.whisper.WhisperContext
+import dev.soupslurpr.transcribro.dataStore
 import dev.soupslurpr.transcribro.models.InstalledModelsRepository
 import dev.soupslurpr.transcribro.models.ModelCatalog
 import dev.soupslurpr.transcribro.models.ModelEntry
 import dev.soupslurpr.transcribro.models.ModelNotInstalledException
+import dev.soupslurpr.transcribro.preferences.PreferencesUiState
 import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationManager
 import dev.soupslurpr.transcribro.recognitionservice.diarization.DiarizationRepository
 import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteEmbedderApi
@@ -31,6 +35,11 @@ import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegment
 import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterLocalDataSource
 import dev.soupslurpr.transcribro.recognitionservice.diarization.PyannoteSegmenterOnnxModel
 import dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerRegistry
+import dev.soupslurpr.transcribro.recognitionservice.remote.RemoteServerConfig
+import dev.soupslurpr.transcribro.recognitionservice.remote.RemoteTranscriptionEngine
+import dev.soupslurpr.transcribro.recognitionservice.remote.RemoteTranscriptionException
+import dev.soupslurpr.transcribro.recognitionservice.remote.ServerUrlValidation
+import dev.soupslurpr.transcribro.recognitionservice.remote.validateServerUrl
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadApi
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadDetector
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadLocalDataSource
@@ -38,15 +47,19 @@ import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadReposito
 import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperApi
 import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperLocalDataSource
 import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.lang.System.currentTimeMillis
+import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 private data class Transcription(
     val audioData: MutableList<Short> = mutableListOf(),
@@ -81,6 +94,13 @@ class MainRecognitionService : RecognitionService() {
         const val EXTRA_MIN_SILENCE_MS = "dev.soupslurpr.transcribro.EXTRA_MIN_SILENCE_MS"
         // Diarization cosine-distance same-speaker threshold (conversation only).
         const val EXTRA_COSINE_THRESHOLD = "dev.soupslurpr.transcribro.EXTRA_COSINE_THRESHOLD"
+        // Boolean: send this session's segment-final passes to the user's configured
+        // transcription server instead of on-device whisper. Only the on/off choice
+        // travels in the intent — the URL / model / token are read from preferences
+        // inside the service, so the token never sits in an Intent and an external app
+        // binding this (exported) service can't point the user's audio at a server of
+        // its own choosing; at most it can opt into the server the user already set up.
+        const val EXTRA_SERVER_TRANSCRIPTION = "dev.soupslurpr.transcribro.EXTRA_SERVER_TRANSCRIPTION"
         // Speaker id (Int) attached to a partial bundle when diarization is on.
         // The display name lookup happens on the receiver via SpeakerLabelStore.
         const val RESULTS_SPEAKER_ID = "dev.soupslurpr.transcribro.RESULTS_SPEAKER_ID"
@@ -264,24 +284,33 @@ class MainRecognitionService : RecognitionService() {
      *
      * [requestedWhisperStreaming] of `null` means "use the final model for streaming
      * too"; the streaming context is loaded from the same file in that case.
+     *
+     * [loadFinal] / [loadStreaming] let server-mode sessions skip contexts they don't
+     * need up front: the final model is only a fallback there (loaded lazily by
+     * [WhisperRepository] on the first server failure), and the streaming model is only
+     * loaded if a live preview will actually run. The loaded* ids therefore record which
+     * models the cached contexts are *configured* for; the contexts themselves may still
+     * be null, and preload is idempotent, so a later local-mode session with the same ids
+     * still loads (and validates) whatever is missing before recording starts.
      */
     private suspend fun ensureCoreModelsLoaded(
         requestedWhisperFinal: String?,
         requestedWhisperStreaming: String?,
         requestedVad: String?,
+        loadFinal: Boolean = true,
+        loadStreaming: Boolean = true,
     ) {
         val whisperChanged = requestedWhisperFinal != loadedWhisperFinalModelId ||
             requestedWhisperStreaming != loadedWhisperStreamingModelId
         if (whisperChanged) {
             whisperRepository.release()
-            loadedWhisperFinalModelId = null
-            loadedWhisperStreamingModelId = null
             activeWhisperFinalModelId = requestedWhisperFinal
             activeWhisperStreamingModelId = requestedWhisperStreaming
-            whisperRepository.preload()
             loadedWhisperFinalModelId = requestedWhisperFinal
             loadedWhisperStreamingModelId = requestedWhisperStreaming
         }
+        if (loadStreaming) whisperRepository.preloadStreaming()
+        if (loadFinal) whisperRepository.preloadFinal()
         if (requestedVad != loadedVadModelId) {
             sileroVadRepository.release()
             loadedVadModelId = null
@@ -297,6 +326,167 @@ class MainRecognitionService : RecognitionService() {
             endThreshold = activeVadEndThreshold,
             minSilenceDurationMs = activeMinSilenceMs,
         )
+    }
+
+    /**
+     * How one recognition session transcribes, decided once at session start by
+     * [prepareSession] and then shared by the audio loop and every segment job.
+     */
+    private class SessionPlan(
+        /** Segment-final pass: on-device whisper, or the server (with optional local fallback). */
+        val finalEngine: TranscriptionEngine,
+        /**
+         * Whether a live streaming preview may run at all. Always true on-device (the
+         * caller's streaming flag still applies on top). In server mode it's only true
+         * when the user wants previews *and* has a local model to run them with — we
+         * deliberately never poll the server once a second for previews.
+         */
+        val streamingAvailable: Boolean,
+        val failure: SessionFailure = SessionFailure(),
+    )
+
+    /**
+     * The first fatal transcription error of a session. Once set, recording stops and
+     * the session ends with [Callback.error] using [errorCode] instead of delivering
+     * results — the segments that did succeed were already sent as partials, so the
+     * UI keeps them.
+     */
+    private class SessionFailure {
+        val errorCode = AtomicReference<Int?>(null)
+        // The "fell back to on-device" toast is shown once per session, not per
+        // segment, so a flaky server doesn't bury the user in toasts.
+        val fallbackNotified = AtomicBoolean(false)
+    }
+
+    /** Server mode was requested but the saved URL doesn't pass [validateServerUrl]. */
+    private class ServerNotConfiguredException(val reason: String) : Exception(reason)
+
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    /** Toasts must be shown from the main thread; segment jobs run on IO. */
+    private fun showToast(message: String) {
+        mainHandler.post {
+            Toast.makeText(this@MainRecognitionService, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun isModelInstalled(id: String?): Boolean {
+        val entry = id?.let { ModelCatalog.findById(it) } ?: return false
+        return installedModels.isInstalled(entry)
+    }
+
+    private suspend fun readServerConfig(): RemoteServerConfig {
+        // A throwaway PreferencesUiState is just the canonical source of the keys; the
+        // service has no ViewModel. DataStore is a single-process singleton, and this
+        // service runs in the app process, so this reads the same instance the UI writes.
+        val keys = PreferencesUiState()
+        val prefs = dataStore.data.first()
+        val url = when (val v = validateServerUrl(prefs[keys.serverUrl.first].orEmpty())) {
+            is ServerUrlValidation.Valid -> v.url
+            is ServerUrlValidation.Invalid -> throw ServerNotConfiguredException(v.reason)
+        }
+        return RemoteServerConfig(
+            url = url,
+            model = prefs[keys.serverModel.first],
+            bearerToken = prefs[keys.serverToken.first],
+        )
+    }
+
+    /**
+     * Load whatever this session needs and decide where its final passes go.
+     *
+     * On-device: identical to before — both whisper contexts plus VAD must load, and a
+     * missing model throws [ModelNotInstalledException].
+     *
+     * Server: VAD (and diarization, loaded by the caller) still run locally. No local
+     * final model is required; if one is installed it becomes the fallback for failed
+     * requests. Streaming previews run only when enabled and a local streaming model
+     * (the explicit streaming pick, else the final pick) is installed.
+     */
+    private suspend fun prepareSession(
+        serverTranscription: Boolean,
+        streamingRequested: Boolean,
+        requestedWhisperFinal: String?,
+        requestedWhisperStreaming: String?,
+        requestedVad: String?,
+    ): SessionPlan {
+        if (!serverTranscription) {
+            ensureCoreModelsLoaded(requestedWhisperFinal, requestedWhisperStreaming, requestedVad)
+            return SessionPlan(finalEngine = whisperRepository, streamingAvailable = true)
+        }
+
+        val config = readServerConfig()
+        // The service can outlive several visits to the Models screen; re-scan so a
+        // model installed since the service started counts as available.
+        installedModels.refresh()
+        val localFinalInstalled = isModelInstalled(requestedWhisperFinal)
+        val localStreamingInstalled =
+            isModelInstalled(requestedWhisperStreaming ?: requestedWhisperFinal)
+        val streamingAvailable = streamingRequested && localStreamingInstalled
+        ensureCoreModelsLoaded(
+            requestedWhisperFinal = requestedWhisperFinal,
+            requestedWhisperStreaming = requestedWhisperStreaming,
+            requestedVad = requestedVad,
+            loadFinal = false,
+            loadStreaming = streamingAvailable,
+        )
+        Log.i(
+            TAG,
+            "server transcription: localFallback=$localFinalInstalled streaming=$streamingAvailable"
+        )
+
+        val failure = SessionFailure()
+        val engine = FallbackTranscriptionEngine(
+            primary = RemoteTranscriptionEngine(config, Dispatchers.IO),
+            fallback = if (localFinalInstalled) whisperRepository else null,
+            onFallback = { e ->
+                Log.w(TAG, "server transcription failed; falling back to on-device model", e)
+                if (failure.fallbackNotified.compareAndSet(false, true)) {
+                    showToast(
+                        "Stenosis: server transcription failed (${e.message}); " +
+                            "using the on-device model instead."
+                    )
+                }
+            },
+        )
+        return SessionPlan(engine, streamingAvailable, failure)
+    }
+
+    /**
+     * Run a segment-final pass. Any failure (server unreachable with no local fallback,
+     * a whisper error, …) is recorded as the session's fatal error, shown once as a
+     * toast, and stops recording; the caller gets `null` and simply skips the segment.
+     * Before this, an exception here escaped the job's [CoroutineScope] uncaught and
+     * took down the whole app process.
+     */
+    private suspend fun transcribeFinalOrFail(plan: SessionPlan, audio: ShortArray): String? {
+        return try {
+            plan.finalEngine.transcribeAudio(audio)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "segment-final transcription failed", e)
+            if (plan.failure.errorCode.compareAndSet(null, errorCodeFor(e))) {
+                showToast(
+                    if (e is RemoteTranscriptionException) {
+                        "Stenosis: server transcription failed — ${e.message}. " +
+                            "Install an on-device model to use as a fallback."
+                    } else {
+                        "Stenosis: transcription failed — ${e.message}"
+                    }
+                )
+                isRecording.set(false)
+            }
+            null
+        }
+    }
+
+    private fun errorCodeFor(e: Throwable): Int = when {
+        e is RemoteTranscriptionException && e.httpStatus != null -> SpeechRecognizer.ERROR_SERVER
+        e is RemoteTranscriptionException && e.cause is SocketTimeoutException ->
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+        e is RemoteTranscriptionException -> SpeechRecognizer.ERROR_NETWORK
+        else -> SpeechRecognizer.ERROR_CLIENT
     }
 
     /** Same idea, but for the diarization pair. Called only when diarization is enabled. */
@@ -350,6 +540,8 @@ class MainRecognitionService : RecognitionService() {
         val diarizationEnabled = recognizerIntent?.extras?.getBoolean(EXTRA_DIARIZATION) ?: false
         val noiseSuppressionEnabled =
             recognizerIntent?.extras?.getBoolean(EXTRA_NOISE_SUPPRESSION) ?: true
+        val serverTranscription =
+            recognizerIntent?.extras?.getBoolean(EXTRA_SERVER_TRANSCRIPTION) ?: false
         val requestedWhisperId = recognizerIntent?.extras?.getString(EXTRA_WHISPER_MODEL_ID)
         val requestedWhisperStreamingId =
             recognizerIntent?.extras?.getString(EXTRA_WHISPER_STREAMING_MODEL_ID)
@@ -379,7 +571,8 @@ class MainRecognitionService : RecognitionService() {
             TAG,
             "onStartListening: streamingEnabled=$streamingEnabled " +
                 "isPartialResults=$isPartialResults diarizationEnabled=$diarizationEnabled " +
-                "noiseSuppressionEnabled=$noiseSuppressionEnabled"
+                "noiseSuppressionEnabled=$noiseSuppressionEnabled " +
+                "serverTranscription=$serverTranscription"
         )
 
         val streamingInFlight = AtomicBoolean(false)
@@ -539,6 +732,8 @@ class MainRecognitionService : RecognitionService() {
                 isPartialResults = isPartialResults == true,
                 listener = listener,
                 denoiser = denoiser,
+                serverTranscription = serverTranscription,
+                streamingEnabled = streamingEnabled,
                 requestedWhisperId = requestedWhisperId,
                 requestedWhisperStreamingId = requestedWhisperStreamingId,
                 requestedVadId = requestedVadId,
@@ -551,12 +746,24 @@ class MainRecognitionService : RecognitionService() {
         }
 
         recordAndTranscribeJob = recordAndTranscribeScope.launch recordAndTranscribe@{
-            try {
-                ensureCoreModelsLoaded(
+            val plan = try {
+                prepareSession(
+                    serverTranscription = serverTranscription,
+                    streamingRequested = streamingEnabled,
                     requestedWhisperFinal = requestedWhisperId,
                     requestedWhisperStreaming = requestedWhisperStreamingId,
                     requestedVad = requestedVadId,
                 )
+            } catch (e: ServerNotConfiguredException) {
+                Log.w(TAG, "recognition refused: server transcription not configured (${e.reason})")
+                showToast(
+                    "Stenosis: server transcription is on but the server URL isn't set up " +
+                        "(${e.reason}). Open Settings → Transcription server."
+                )
+                audioRecord.release()
+                denoiser?.close()
+                listener?.error(SpeechRecognizer.ERROR_CLIENT)
+                return@recordAndTranscribe
             } catch (e: ModelNotInstalledException) {
                 Log.w(TAG, "recognition refused: ${e.entry.id} not installed")
                 withContext(Dispatchers.Main) {
@@ -633,7 +840,7 @@ class MainRecognitionService : RecognitionService() {
                 // Sliding-window streaming preview: while the current segment is still open
                 // (VAD start fired, end has not), every ~1s of new audio we kick off a fast
                 // greedy whisper pass on the segment-so-far and emit it as a streaming partial.
-                if (streamingEnabled && isPartialResults == true) {
+                if (streamingEnabled && plan.streamingAvailable && isPartialResults == true) {
                     if (lastStreamedTranscriptionIndex != currentTranscriptionIndex) {
                         lastStreamedSize = 0
                         lastStreamedTranscriptionIndex = currentTranscriptionIndex
@@ -796,7 +1003,8 @@ class MainRecognitionService : RecognitionService() {
                             val timeBeforeTranscription = currentTimeMillis()
 
                             val transcriptionText =
-                                whisperRepository.transcribeAudio(
+                                transcribeFinalOrFail(
+                                    plan,
                                     transcription.audioData.slice(
                                         ((transcription.start!!.toInt() - speechStartPadMs).coerceAtLeast(
                                             0
@@ -805,7 +1013,9 @@ class MainRecognitionService : RecognitionService() {
                                         .toShortArray(),
                                 )
 
-                            transcription.text = transcriptionText
+                            // null = this segment failed; the session error is already
+                            // recorded, so contribute nothing rather than crash.
+                            transcription.text = transcriptionText ?: ""
 
                             totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription
 
@@ -870,14 +1080,15 @@ class MainRecognitionService : RecognitionService() {
                                             val timeBeforeTranscription = currentTimeMillis()
 
                                             transcription.text =
-                                                whisperRepository.transcribeAudio(
+                                                transcribeFinalOrFail(
+                                                    plan,
                                                     transcription.audioData.slice(
                                                         ((transcription.start!!.toInt() - speechStartPadMs).coerceAtLeast(
                                                             0
                                                         ))..((transcription.end!!.toInt()).coerceAtMost(transcription.audioData.size - 1))
                                                     )
                                                         .toShortArray(),
-                                                )
+                                                ) ?: ""
 
                                             totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription
 
@@ -945,6 +1156,11 @@ class MainRecognitionService : RecognitionService() {
             }
 
             if (!isActive) {
+                return@recordAndTranscribe
+            }
+
+            plan.failure.errorCode.get()?.let { code ->
+                listener?.error(code)
                 return@recordAndTranscribe
             }
 
@@ -1022,6 +1238,8 @@ class MainRecognitionService : RecognitionService() {
         isPartialResults: Boolean,
         listener: Callback?,
         denoiser: Denoiser?,
+        serverTranscription: Boolean,
+        streamingEnabled: Boolean,
         requestedWhisperId: String?,
         requestedWhisperStreamingId: String?,
         requestedVadId: String?,
@@ -1032,13 +1250,26 @@ class MainRecognitionService : RecognitionService() {
     ): Job = recordAndTranscribeScope.launch diarize@{
         // Load (or switch) whisper + VAD before the audio loop starts. Diarization
         // models are loaded inside the existing try below.
-        try {
-            ensureCoreModelsLoaded(
+        val plan = try {
+            prepareSession(
+                serverTranscription = serverTranscription,
+                streamingRequested = streamingEnabled,
                 requestedWhisperFinal = requestedWhisperId,
                 requestedWhisperStreaming = requestedWhisperStreamingId,
                 requestedVad = requestedVadId,
+            ).also {
+                ensureDiarizationLoaded(requestedSegmenterId, requestedEmbedderId)
+            }
+        } catch (e: ServerNotConfiguredException) {
+            Log.w(TAG, "diarization session refused: server transcription not configured (${e.reason})")
+            showToast(
+                "Stenosis: server transcription is on but the server URL isn't set up " +
+                    "(${e.reason}). Open Settings → Transcription server."
             )
-            ensureDiarizationLoaded(requestedSegmenterId, requestedEmbedderId)
+            audioRecord.release()
+            denoiser?.close()
+            listener?.error(SpeechRecognizer.ERROR_CLIENT)
+            return@diarize
         } catch (e: ModelNotInstalledException) {
             Log.w(TAG, "diarization session refused: ${e.entry.id} not installed")
             withContext(Dispatchers.Main) {
@@ -1135,7 +1366,7 @@ class MainRecognitionService : RecognitionService() {
                     lastCommitEndSample = event.sampleRangeEnd
                 }
                 val job = transcribeScope.launch {
-                    val text = whisperRepository.transcribeAudio(event.audio).trim()
+                    val text = transcribeFinalOrFail(plan, event.audio)?.trim() ?: return@launch
                     if (text.isBlank()) return@launch
                     synchronized(committed) {
                         committed += CommittedTurn(event.globalSpeakerId, text)
@@ -1161,6 +1392,10 @@ class MainRecognitionService : RecognitionService() {
         // Run a streaming preview alongside diarization so the user gets live feedback
         // during recording (same UX as the VAD flow). The streaming pass is unlabeled —
         // labeled commits land separately as the per-speaker segments close.
+        //
+        // On-device this has always run regardless of the streaming toggle;
+        // [SessionPlan.streamingAvailable] is always true there, so that's unchanged. In
+        // server mode it additionally needs the toggle on and a local streaming model.
         val streamingInFlight = AtomicBoolean(false)
         var samplesSinceLastStreaming = 0L
         var streamingAudioCtx = STREAMING_AUDIO_CTX_INITIAL
@@ -1189,6 +1424,7 @@ class MainRecognitionService : RecognitionService() {
                     // Streaming preview every ~1s, on whatever audio is in the rolling
                     // window (which is also what DiarizationManager segments on).
                     if (isPartialResults &&
+                        plan.streamingAvailable &&
                         samplesSinceLastStreaming >= STREAMING_TRIGGER_SAMPLES &&
                         !streamingInFlight.get()
                     ) {
@@ -1324,7 +1560,12 @@ class MainRecognitionService : RecognitionService() {
                 )
             }
             try {
-                listener?.results(bundle)
+                val errorCode = plan.failure.errorCode.get()
+                if (errorCode != null) {
+                    listener?.error(errorCode)
+                } else {
+                    listener?.results(bundle)
+                }
             } catch (e: RemoteException) {
                 Log.w(TAG, "results RemoteException", e)
             }

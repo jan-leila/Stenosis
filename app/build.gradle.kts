@@ -98,4 +98,10 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("com.google.accompanist:accompanist-permissions:0.37.3")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+
+    // Host-JVM unit tests for the pure-Kotlin server transcription protocol code.
+    // org.json ships with Android, but the android.jar on the unit-test classpath only
+    // has throwing stubs, so the real implementation is supplied for tests.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

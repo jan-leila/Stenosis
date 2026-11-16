@@ -16,9 +16,14 @@ data class PreferencesUiState(
         mutableStateOf(false)
     ),
 
-    /** Whether the user has accepted the privacy policy and license. */
+    /**
+     * Whether the user has accepted the privacy policy and license. The version suffix
+     * is bumped whenever the policy text changes materially (V0.4.0: opt-in server
+     * transcription can send audio off-device), which makes every existing user see
+     * and re-accept the new text on next launch.
+     */
     val acceptedPrivacyPolicyAndLicense: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
-        (booleanPreferencesKey("ACCEPTED_PRIVACY_POLICY_AND_LICENSE_V0.3.0")),
+        (booleanPreferencesKey("ACCEPTED_PRIVACY_POLICY_AND_LICENSE_V0.4.0")),
         mutableStateOf(false)
     ),
 
@@ -198,6 +203,50 @@ data class PreferencesUiState(
     val conversationVadModelId: Pair<Preferences.Key<String>, MutableState<String?>> = Pair(
         stringPreferencesKey("CONVERSATION_VAD_MODEL_ID"),
         mutableStateOf("silero-vad-v5"),
+    ),
+
+    // --- Server transcription -------------------------------------------------------
+    // The backend choice is per mode (like every other pipeline knob) so a user can,
+    // say, dictate on-device in the keyboard but send long conversations to their home
+    // server. The server connection itself is shared: there's one server, not one per
+    // mode. Off by default — audio only leaves the device after an explicit opt-in.
+
+    /** Send keyboard segment-final passes to the configured server instead of on-device whisper. */
+    val keyboardServerTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("KEYBOARD_SERVER_TRANSCRIPTION"),
+        mutableStateOf(false),
+    ),
+
+    /** Send conversation segment-final passes to the configured server instead of on-device whisper. */
+    val conversationServerTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("CONVERSATION_SERVER_TRANSCRIPTION"),
+        mutableStateOf(false),
+    ),
+
+    /**
+     * Full URL of an OpenAI-compatible transcription endpoint, used verbatim (e.g.
+     * `https://host/v1/audio/transcriptions`). Must be https; see
+     * [dev.soupslurpr.transcribro.recognitionservice.remote.validateServerUrl].
+     */
+    val serverUrl: Pair<Preferences.Key<String>, MutableState<String>> = Pair(
+        stringPreferencesKey("SERVER_URL"),
+        mutableStateOf(""),
+    ),
+
+    /** Optional `model` form field. Blank means "let the server pick its default". */
+    val serverModel: Pair<Preferences.Key<String>, MutableState<String>> = Pair(
+        stringPreferencesKey("SERVER_MODEL"),
+        mutableStateOf(""),
+    ),
+
+    /**
+     * Optional bearer token. Stored in plain DataStore like every other preference —
+     * no encrypted-storage dependency exists in the app and adding one for a single
+     * optional field isn't worth it; the settings UI says so next to the field.
+     */
+    val serverToken: Pair<Preferences.Key<String>, MutableState<String>> = Pair(
+        stringPreferencesKey("SERVER_TOKEN"),
+        mutableStateOf(""),
     ),
 ) {
     companion object {

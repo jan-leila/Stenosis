@@ -48,6 +48,8 @@ import dev.soupslurpr.transcribro.models.ModelCatalog
 import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
 import dev.soupslurpr.transcribro.recognitionservice.diarization.SpeakerLabelStore
+import dev.soupslurpr.transcribro.recognitionservice.remote.ServerUrlValidation
+import dev.soupslurpr.transcribro.recognitionservice.remote.validateServerUrl
 
 /**
  * Transcription view. Drives [MainRecognitionService] directly without going through
@@ -93,6 +95,9 @@ fun TranscribeScreen() {
     val vadEndThreshold = preferencesUiState.conversationVadEndThreshold.second.value
     val minSilenceMs = preferencesUiState.conversationMinSilenceMs.second.value
     val cosineThreshold = preferencesUiState.conversationCosineThreshold.second.value
+    val serverTranscription = preferencesUiState.conversationServerTranscription.second.value
+    val serverUrlValid =
+        validateServerUrl(preferencesUiState.serverUrl.second.value) is ServerUrlValidation.Valid
 
     val installedRepo = remember { InstalledModelsRepository(context) }
     val installedState by installedRepo.state.collectAsState()
@@ -109,12 +114,19 @@ fun TranscribeScreen() {
                 add(entry?.displayName ?: label)
             }
         }
-        req(whisperModelId, "transcription model")
-        // Streaming model is optional. If the user picked one explicitly we require it,
-        // because the alternative would be silently downgrading the live preview to a
-        // different model than the user chose.
-        if (whisperStreamingModelId != null) {
-            req(whisperStreamingModelId, "streaming preview model")
+        if (serverTranscription) {
+            // Server mode: the server does the final pass, so no local whisper model is
+            // required. Any installed one is used opportunistically by the service (as
+            // the fallback / for the live preview), but its absence isn't a blocker.
+            if (!serverUrlValid) add("a valid server URL (Settings → Transcription server)")
+        } else {
+            req(whisperModelId, "transcription model")
+            // Streaming model is optional. If the user picked one explicitly we require it,
+            // because the alternative would be silently downgrading the live preview to a
+            // different model than the user chose.
+            if (whisperStreamingModelId != null) {
+                req(whisperStreamingModelId, "streaming preview model")
+            }
         }
         req(vadModelId, "voice activity model")
         if (diarizationEnabled) {
@@ -236,7 +248,7 @@ fun TranscribeScreen() {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        text = "Missing models",
+                        text = if (serverTranscription) "Missing setup" else "Missing models",
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Spacer(Modifier.size(4.dp))
@@ -282,6 +294,10 @@ fun TranscribeScreen() {
                                     vadEndThreshold,
                                 )
                                 putExtra(MainRecognitionService.EXTRA_MIN_SILENCE_MS, minSilenceMs)
+                                putExtra(
+                                    MainRecognitionService.EXTRA_SERVER_TRANSCRIPTION,
+                                    serverTranscription,
+                                )
                                 putExtra(
                                     MainRecognitionService.EXTRA_COSINE_THRESHOLD,
                                     cosineThreshold,
