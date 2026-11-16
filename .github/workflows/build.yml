@@ -1,0 +1,52 @@
+name: Build
+
+on: [push, workflow_dispatch]
+
+# The job only builds and asserts; nothing here writes to the repository, so
+# the workflow token gets read access and no more.
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    # The tree carries no jvmToolchain pin, so the JDK that launches Gradle is
+    # the one that compiles. 17 is the bytecode target (sourceCompatibility in
+    # app/build.gradle.kts); building on 21 as well keeps 17 a tested floor.
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: [17, 21]
+    steps:
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java-version }}
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Only the two submodules .gitmodules maps. llama.cpp is a gitlink with no
+      # mapping, so a recursive update would fail on it.
+      - name: Fetch native submodules
+        run: git submodule update --init --depth 1 whisper.cpp rnnoise
+      - name: Cache build deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-deps-${{ runner.os }}-${{ hashFiles('gradle/**', 'gradlew*', 'gradle.properties', '*.gradle*') }}
+          restore-keys: |
+            android-deps-${{ runner.os }}-
+      # The NDK and CMake the native build needs are installed on demand by AGP
+      # from ndkVersion in app/build.gradle.kts.
+      - name: Build and Test
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest :app:lintDebug
+      - name: Upload debug APK
+        if: matrix.java-version == 21
+        uses: actions/upload-artifact@v4
+        with:
+          name: stenosis-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
